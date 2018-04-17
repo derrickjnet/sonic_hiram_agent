@@ -221,7 +221,6 @@ class TrackedEnv(gym.Wrapper):
         self.total_reward = 0
         self.total_steps_ever = 0
     #RL variables for agent init
-    # (sourced:https://towardsdatascience.com/reinforcement-learning-w-keras-openai-dqns-1eed3a5338c)
         self.memory = deque(maxlen=2000)
         self.gamma = 0.85
         self.epsilon = 1.0
