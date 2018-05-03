@@ -1,33 +1,46 @@
 #!/usr/bin/env python
-#ENV_LOCAL
+#Human Preferences for
+#DQN Lib: https://github.com/keon/deep-q-learning/blob/master/dqn.py
+#Play Lib: https://raw.githubusercontent.com/openai/gym/master/gym/utils/play.py
+#DL from Human Pref: https://blog.openai.com/deep-reinforcement-learning-from-human-preferences/
+#DL from Human Pref: https://arxiv.org/abs/1706.03741
+#Implicit Imitation: https://www.aaai.org/Papers/JAIR/Vol19/JAIR-1916.pdf
+
+
+# ENV_LOCAL
 from retro_contest.local import make
-#ENV_REMOTE
+# ENV_REMOTE
 import gym_remote.client as grc
 import gym_remote.exceptions as gre
-#ENV_PLUS
+# ENV_PLUS
 import gym
+import sys
+import time
+import pygame
+from pygame.locals import *
 import random
+# FIFO
+from collections import deque
+# ML/RL
 import numpy as np
 import matplotlib.pyplot as plt
+import skimage
 from scipy import ndimage as ndi
 from skimage import feature
-import skimage
-#FIFO
-from collections import deque
-#ML/RL
 from keras.models import Sequential
 from keras.layers import Dense
 from keras.optimizers import Adam
-#GLOBALS
+
+# GLOBALS
 local_env = True
 EMA_RATE = 0.2
 EXPLOIT_BIAS = 0.15
 TOTAL_TIMESTEPS = int(1e6)
-completion = 9000 #Estimated End
+completion = 9000  # Estimated End
 batches = 4
-#References
-#https://github.com/keon/deep-q-learning/blob/master/dqn.py
 
+pygame.init()
+pygame.display.set_mode((1,1))
 
 def main():
     """Run JERK on the attached environment."""
@@ -46,7 +59,7 @@ def main():
                   'LabyrinthZone.Act2',
                   'LabyrinthZone.Act1',
                   'LabyrinthZone.Act3']
-        LEVEL =  levels[3]#[random.randrange(0, 13, 1)]
+        LEVEL = levels[3]  # [random.randrange(0, 13, 1)]
         print(LEVEL)
         env = make(game='SonicTheHedgehog-Genesis', state=LEVEL)
     else:
@@ -60,25 +73,34 @@ def main():
     print(state_size, action_size)
     agent = DQNAgent(state_size, action_size)
     env.pause_rl()
+    env.trainer = True
     while env.total_steps_ever <= TOTAL_TIMESTEPS:
-        if new_ep: #If new episode....
-            if env.rl: #If RL is predict with RL
-                if not env.resume: #Resume RL Decisions
+        while env.trainer:
+            if pygame.key.get_pressed()[pygame.K_UP]:
+                env.control(4)
+            if pygame.key.get_pressed()[pygame.K_LEFT]:
+                env.control(0)
+            if pygame.key.get_pressed()[pygame.K_LEFT]:
+                env.control(1)
+
+        if new_ep:  # If new episode....
+            if env.rl:  # If RL is predict with RL
+                if not env.resume:  # Resume RL Decisions
                     state = env.reset()
                 else:
                     state = env.step(env.control())
                 done = False
                 while not done:
                     # env.render()
-                    action = agent.act(state,env)
+                    action = agent.act(state, env)
                     next_state, reward, done, _ = env.step(action)
                     reward = reward if not done else -10
-                    #next_state = np.reshape(next_state, [1, state_size])
-                    agent.remember(state, action, reward, next_state, done,env)
+                    # next_state = np.reshape(next_state, [1, state_size])
+                    agent.remember(state, action, reward, next_state, done, env)
                     state = next_state
                 env.pause_rl()
                 continue
-            #Else JERK replay
+            # Else JERK replay
             if (solutions and
                     random.random() < EXPLOIT_BIAS + env.total_steps_ever / TOTAL_TIMESTEPS):
                 solutions = sorted(solutions, key=lambda x: np.mean(x[0]))
@@ -91,16 +113,17 @@ def main():
             else:
                 env.reset()
                 new_ep = False
-        #Else JERK play
+        # Else JERK play
         rew, new_ep = move(env, 100)
         if not new_ep and rew <= 0:
             env.resume_rl()
-            #print('backtracking due to negative reward: %f' % rew)
+            # print('backtracking due to negative reward: %f' % rew)
             # _, new_ep = move(env, 70, left=True)
         if new_ep:
             solutions.append(([max(env.reward_history)], env.best_sequence()))
             episode += 1
     agent.save('hiram')
+
 
 def move(env, num_steps, left=False, jump_prob=1.0 / 10.0, jump_repeat=4):
     """
@@ -130,7 +153,8 @@ def move(env, num_steps, left=False, jump_prob=1.0 / 10.0, jump_repeat=4):
             break
     return total_rew, done
 
-def capture_moment(env,frames,done):
+
+def capture_moment(env, frames, done):
     if done:
         env.in_danger_pos.append(env.total_reward)
         img = env.observation_history[-1]
@@ -142,10 +166,10 @@ def capture_moment(env,frames,done):
         # img = env.observation_history[frames+5]
         # show_moment(img)
 
+
 def show_moment(img):
     plt.imshow(img)
     plt.show()
-
 
 def exploit(env, sequence, agent):
     """
@@ -163,7 +187,7 @@ def exploit(env, sequence, agent):
             done = True
         else:
             new_state, rew, done, _ = env.step(sequence[idx])
-            agent.remember(state, sequence[idx], rew, new_state, done, env) #Train agent from best sequence
+            agent.remember(state, sequence[idx], rew, new_state, done, env)  # Train agent from best sequence
             state = new_state
         idx += 1
     # agent.replay(batches)
@@ -171,14 +195,15 @@ def exploit(env, sequence, agent):
     env.replay_reward_history.append(env.total_reward)
     return env.total_reward
 
-#DEFINE AGENT
+
+# DEFINE AGENT
 class DQNAgent:
     def __init__(self, state_size, action_size):
 
         self.state_size = state_size
         self.action_size = action_size
         self.memory = deque(maxlen=2000)
-        self.gamma = 0.95    # discount rate
+        self.gamma = 0.95  # discount rate
         self.epsilon = 1.0  # exploration rate
         self.epsilon_min = 0.01
         self.epsilon_decay = 0.995
@@ -188,7 +213,7 @@ class DQNAgent:
     def _build_model(self):
         # Neural Net for Deep-Q learning Model
         model = Sequential()
-        model.add(Dense(24, input_shape=(1,224,320), activation='relu'))
+        model.add(Dense(24, input_shape=(1, 224, 320), activation='relu'))
         model.add(Dense(24, activation='relu'))
         model.add(Dense(self.action_size, activation='linear'))
         model.compile(loss='mse',
@@ -197,11 +222,11 @@ class DQNAgent:
 
     def remember(self, state, action, reward, next_state, done, env):
         self.memory.append((state, action, reward, next_state, done,
-                            env.safety,env.esteem,env.belonging,env.potential))
+                            env.safety, env.esteem, env.belonging, env.potential))
 
     def act(self, state, env):
         if np.random.rand() <= self.epsilon:
-            return env.control()  #Fix
+            return env.control()  # Fix
         print('RL Move')
         act_values = self.model.predict(state)
         print(act_values)
@@ -229,15 +254,16 @@ class DQNAgent:
         self.model.save_weights(name)
 
 
-#DEFINE GYM
+# DEFINE GYM
 class TrackedEnv(gym.Wrapper):
     """
     An environment that tracks the current trajectory and
     the total number of timesteps ever taken.
     """
+
     def __init__(self, env):
         super(TrackedEnv, self).__init__(env)
-        #self.observation_space = spaces.Box(low=0, high=255, shape=(84, 84, 1), dtype=np.uint8)
+        # self.observation_space = spaces.Box(low=0, high=255, shape=(84, 84, 1), dtype=np.uint8)
 
         buttons = ["B", "A", "MODE", "START", "UP", "DOWN", "LEFT", "RIGHT", "C", "Y", "X", "Z"]
         actions = [['LEFT'], ['RIGHT'], ['LEFT', 'DOWN'], ['RIGHT', 'DOWN'], ['DOWN'],
@@ -273,6 +299,7 @@ class TrackedEnv(gym.Wrapper):
         self.belonging = False  # Tracks collision, seeks to avoid bad friends
         self.esteem = False  # Tracks reward, seeks
         self.potential = False  # Tracks completion || reward > 9000
+        self.trainer = False
 
     def best_sequence(self):
         """
@@ -282,7 +309,7 @@ class TrackedEnv(gym.Wrapper):
         max_cumulative = max(self.reward_history)
         for i, rew in enumerate(self.reward_history):
             if rew == max_cumulative:
-                return self.action_history[:i+1]
+                return self.action_history[:i + 1]
         raise RuntimeError('unreachable')
 
     # pylint: disable=E0202
@@ -320,16 +347,18 @@ class TrackedEnv(gym.Wrapper):
             self.safety = True
         else:
             self.safety = False
+        if 1 == 1:  # Next to box, gadget, assistance
+            self.belonging = False
         # self.track_evolution.append({'reward':self.total_reward,'survival':self.survival,'safety':self.safety,'belonging':self.belonging,
         #                              'esteem':self.esteem,'potential':self.potential})
 
-    def process_frames(self,obs):
+    def process_frames(self, obs):
         x_t1 = skimage.color.rgb2gray(obs)
-        #x_t1 = skimage.transform.resize(x_t1, (84, 84))
+        # x_t1 = skimage.transform.resize(x_t1, (84, 84))
         x_t1 = x_t1.reshape(1, 1, x_t1.shape[0], x_t1.shape[1])
         return x_t1
 
-    def control(self, a = None):  # pylint: disable=W0221
+    def control(self, a=None):  # pylint: disable=W0221
         if not a:
             a = self.action_space.sample()
         return self._actions[a].copy()
@@ -345,10 +374,11 @@ class TrackedEnv(gym.Wrapper):
         self._max_x = max(self._max_x, self._cur_x)
         self.reward_history.append(self.total_reward)
         if self.steps > 1:
-            self.maslow(done,info)
+            self.maslow(done, info)
         self.steps += 1
-        self.render()
+        # self.render()
         return obs, rew, done, info
+
 
 if __name__ == '__main__':
     try:
