@@ -14,11 +14,8 @@ import gym_remote.exceptions as gre
 # ENV_PLUS
 import gym
 import sqlite3
-import sys
-import time
-import pygame
-from pygame.locals import *
 import random
+import time
 # FIFO
 from collections import deque
 # ML/RL
@@ -28,9 +25,13 @@ import matplotlib.pyplot as plt
 import skimage
 from scipy import ndimage as ndi
 from skimage import feature
+from auto_ml import Predictor
+from auto_ml.utils_models import load_ml_model
 from keras.models import Sequential
 from keras.layers import Dense
 from keras.optimizers import Adam
+#Load ML
+# trained_model = load_ml_model('reward.ml')
 
 # GLOBALS
 local_env = True
@@ -48,17 +49,18 @@ conn = sqlite3.connect('retro.db')
 db = conn.cursor()
 
 # Setup Storage
-stats_col = ["episode", "steps", "acts1", "acts3", "acts5", "acts7", "acts9", "acts11"
-    , "acts33", "safety", "esteem", "belonging", "potential", "total_reward"]
-df = pd.DataFrame(
-    [np.zeros(14)], columns=stats_col)
+stats_col = ["episode", "steps", "cur_action","prev_action","acts1", "acts3", "acts5", "acts7", "acts9", "acts11"
+    , "acts33", "safety", "esteem", "belonging", "potential", "human","total_reward"]
+df = pd.DataFrame(columns=stats_col)
 df.to_sql('game_stats', conn, if_exists='replace')
 
+sarsa_col = ["cluster","points","esteem"]
+sarsa = pd.DataFrame(columns=sarsa_col)
+sarsa.to_sql('sarsa', conn, if_exists='replace')
 
 def main():
-    """Run JERK on the attached environment."""
 
-    if local_env:
+    if local_env: #Select Random Level if local
         levels = ['SpringYardZone.Act3',
                   'SpringYardZone.Act2',
                   'GreenHillZone.Act3',
@@ -72,9 +74,7 @@ def main():
                   'LabyrinthZone.Act2',
                   'LabyrinthZone.Act1',
                   'LabyrinthZone.Act3']
-        LEVEL = levels[3]  # [random.randrange(0, 13, 1)]
-        print(LEVEL)
-        env = make(game='SonicTheHedgehog-Genesis', state=LEVEL)
+        env = make(game='SonicTheHedgehog-Genesis', state=levels[random.randrange(0, 13, 1)])
     else:
         env = grc.RemoteEnv('tmp/sock')
     env = TrackedEnv(env)
@@ -85,11 +85,12 @@ def main():
     action_size = env.action_space.n
     print(state_size, action_size)
     agent = DQNAgent(state_size, action_size)  # Create DQN Agent
-    env.play = True
+    env.play = False
     env.trainer = False  # Begin with mentor led exploration
     env.resume_rl(False)  # Begin with RL exploration
 
     while env.total_steps_ever <= TOTAL_TIMESTEPS:  # Interact with Retro environment until Total TimeSteps expire.
+
         while env.trainer:
             keys = getch()
             if keys == 'A':
@@ -103,7 +104,7 @@ def main():
             if keys == ' ':
                 env.step(env.control(5))
             print('Entering Self Play')
-            env.esteem = False
+            time.sleep(25.0 / 1000.0)
 
         if new_ep:  # If new episode....
             if env.rl:  # Try RL exploration
@@ -141,11 +142,11 @@ def main():
             # print('backtracking due to negative reward: %f' % rew)
             # _, new_ep = move(env, 70, left=True)
         data = pd.read_sql_query("SELECT * FROM game_stats", conn)
-        print(data[-5:])
+        #print(data[-5:])
         if new_ep:
             solutions.append(([max(env.reward_history)], env.best_sequence()))
             env.episode += 1
-    agent.save('hiram')
+    agent.save('retro.model')
 
 
 # Enable Keyboard
@@ -315,7 +316,7 @@ class TrackedEnv(gym.Wrapper):
 
 
         #Toggles
-        self.play = False #Allow human trainer
+        self.play = True #Allow human trainer
         self.trainer = False #Enables and tracks training
         self.rl = False #Enables RL exploration
         self.resume = False #Resumes RL exploration
@@ -388,24 +389,22 @@ class TrackedEnv(gym.Wrapper):
             self.survival = True
         if int(self.reward_history[-2]) < int(self.reward_history[-1]):
             self.esteem = True
-            self.trainer = False
+            if self._cur_x == self._max_x: #If rewards are progressing have the computer resume.
+                self.trainer = False
         else:  # If esteem is low (i.e, stuck, in time loop, new scenario ask for help)
-            if not done & self.play:
-                self.trainer = True
+            if self.play:
+                if not done:
+                    self.trainer = True
             else:
                 self.esteem = False
-                self.trainer = False
+                if self._cur_x == self._max_x:
+                    self.trainer = False
                 self.resume_rl()
                 self.is_stuck_pos.append(self.total_reward)
-
-
-
         if info['rings'] > 0:
             self.safety = True
         else:
             self.safety = False
-        # self.track_evolution.append({'reward':self.total_reward,'survival':self.survival,'safety':self.safety,'belonging':self.belonging,
-        #                              'esteem':self.esteem,'potential':self.potential})
 
     def process_frames(self, obs):
         x_t1 = skimage.color.rgb2gray(obs)
@@ -421,6 +420,15 @@ class TrackedEnv(gym.Wrapper):
         return acts
 
     def stats(self):
+        # tm = trained_model.predict(self.table[-1])
+        cur_action = str(self.action_history[-1])
+        if self.steps > 5:
+            prev_action = str(self.action_history[-2])
+            cluster_action = str(self.action_history[-5:])
+            db.execute("INSERT INTO sarsa VALUES (NULL,?, ?,?)",
+                       (cluster_action,self.analytics(5),self.esteem))
+            conn.commit()
+        else: prev_action = ''
         acts1 = self.analytics(1)
         acts3 = self.analytics(3)
         acts5 = self.analytics(5)
@@ -428,12 +436,12 @@ class TrackedEnv(gym.Wrapper):
         acts9 = self.analytics(9)
         acts11 = self.analytics(11)
         acts33 = self.analytics(33)
-        db.execute("INSERT INTO game_stats VALUES (NULL,?, ?, ?, ?,?,?,?,?,?,?,?,?,?,?)",
-                   (self.episode, self.steps, acts1, acts3, acts5, acts7, acts9, acts11, acts33
+        db.execute("INSERT INTO game_stats VALUES (NULL,?, ?, ?,?,?, ?,?,?,?,?,?,?,?,?,?,?,?)",
+                   (self.episode, self.steps, cur_action, prev_action,acts1, acts3, acts5, acts7, acts9, acts11, acts33
                     , int(self.safety), int(self.esteem)
-                    , int(self.belonging), int(self.potential), int(self.total_reward)))
-
+                    , int(self.belonging), int(self.potential), int(self.trainer),int(self.total_reward)))
         conn.commit()
+        # return tm
 
     def control(self, a=None):  # Enable Disrete Actions pylint: disable=W0221
         if not a:
