@@ -1,11 +1,10 @@
 #!/usr/bin/env python
-#Human Preferences for
-#DQN Lib: https://github.com/keon/deep-q-learning/blob/master/dqn.py
-#Play Lib: https://raw.githubusercontent.com/openai/gym/master/gym/utils/play.py
-#DL from Human Pref: https://blog.openai.com/deep-reinforcement-learning-from-human-preferences/
-#DL from Human Pref: https://arxiv.org/abs/1706.03741
-#Implicit Imitation: https://www.aaai.org/Papers/JAIR/Vol19/JAIR-1916.pdf
-
+# Human Preferences for
+# DQN Lib: https://github.com/keon/deep-q-learning/blob/master/dqn.py
+# Play Lib: https://raw.githubusercontent.com/openai/gym/master/gym/utils/play.py
+# DL from Human Pref: https://blog.openai.com/deep-reinforcement-learning-from-human-preferences/
+# DL from Human Pref: https://arxiv.org/abs/1706.03741
+# Implicit Imitation: https://www.aaai.org/Papers/JAIR/Vol19/JAIR-1916.pdf
 
 # ENV_LOCAL
 from retro_contest.local import make
@@ -14,6 +13,7 @@ import gym_remote.client as grc
 import gym_remote.exceptions as gre
 # ENV_PLUS
 import gym
+import sqlite3
 import sys
 import time
 import pygame
@@ -22,6 +22,7 @@ import random
 # FIFO
 from collections import deque
 # ML/RL
+import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import skimage
@@ -38,9 +39,21 @@ EXPLOIT_BIAS = 0.15
 TOTAL_TIMESTEPS = int(1e6)
 completion = 9000  # Estimated End
 batches = 4
+# References
+# https://github.com/keon/deep-q-learning/blob/master/dqn.py
 
-pygame.init()
-pygame.display.set_mode((1,1))
+
+# Create Storage
+conn = sqlite3.connect('retro.db')
+db = conn.cursor()
+
+# Setup Storage
+stats_col = ["episode", "steps", "acts1", "acts3", "acts5", "acts7", "acts9", "acts11"
+    , "acts33", "safety", "esteem", "belonging", "potential", "total_reward"]
+df = pd.DataFrame(
+    [np.zeros(14)], columns=stats_col)
+df.to_sql('game_stats', conn, if_exists='replace')
+
 
 def main():
     """Run JERK on the attached environment."""
@@ -65,42 +78,50 @@ def main():
     else:
         env = grc.RemoteEnv('tmp/sock')
     env = TrackedEnv(env)
-    new_ep = True
-    episode = 1
-    solutions = []
+    env.reset()  # Initialize Gaming Environment
+    new_ep = True  # New Episode Flag
+    solutions = []  # Track Solutions
     state_size = env.observation_space.shape[0]
     action_size = env.action_space.n
     print(state_size, action_size)
-    agent = DQNAgent(state_size, action_size)
-    env.pause_rl()
-    env.trainer = True
-    while env.total_steps_ever <= TOTAL_TIMESTEPS:
+    agent = DQNAgent(state_size, action_size)  # Create DQN Agent
+    env.play = True
+    env.trainer = False  # Begin with mentor led exploration
+    env.resume_rl(False)  # Begin with RL exploration
+
+    while env.total_steps_ever <= TOTAL_TIMESTEPS:  # Interact with Retro environment until Total TimeSteps expire.
         while env.trainer:
-            if pygame.key.get_pressed()[pygame.K_UP]:
-                env.control(4)
-            if pygame.key.get_pressed()[pygame.K_LEFT]:
-                env.control(0)
-            if pygame.key.get_pressed()[pygame.K_LEFT]:
-                env.control(1)
+            keys = getch()
+            if keys == 'A':
+                env.step(env.control(-1))
+            if keys == 'B':
+                env.step(env.control(4))
+            if keys == 'C':
+                env.step(env.control(3))
+            if keys == 'D':
+                env.step(env.control(2))
+            if keys == ' ':
+                env.step(env.control(5))
+            print('Entering Self Play')
+            env.esteem = False
 
         if new_ep:  # If new episode....
-            if env.rl:  # If RL is predict with RL
-                if not env.resume:  # Resume RL Decisions
+            if env.rl:  # Try RL exploration
+                if not env.resume:  # Resume RL exploration
                     state = env.reset()
                 else:
                     state = env.step(env.control())
                 done = False
                 while not done:
-                    # env.render()
                     action = agent.act(state, env)
                     next_state, reward, done, _ = env.step(action)
                     reward = reward if not done else -10
                     # next_state = np.reshape(next_state, [1, state_size])
                     agent.remember(state, action, reward, next_state, done, env)
                     state = next_state
-                env.pause_rl()
+                env.resume_rl(False)
                 continue
-            # Else JERK replay
+            #Else JERK replay
             if (solutions and
                     random.random() < EXPLOIT_BIAS + env.total_steps_ever / TOTAL_TIMESTEPS):
                 solutions = sorted(solutions, key=lambda x: np.mean(x[0]))
@@ -113,16 +134,34 @@ def main():
             else:
                 env.reset()
                 new_ep = False
-        # Else JERK play
+        #Else JERK play
         rew, new_ep = move(env, 100)
         if not new_ep and rew <= 0:
             env.resume_rl()
             # print('backtracking due to negative reward: %f' % rew)
             # _, new_ep = move(env, 70, left=True)
+        data = pd.read_sql_query("SELECT * FROM game_stats", conn)
+        print(data[-5:])
         if new_ep:
             solutions.append(([max(env.reward_history)], env.best_sequence()))
-            episode += 1
+            env.episode += 1
     agent.save('hiram')
+
+
+# Enable Keyboard
+def getch():
+    import sys, tty, termios
+    old_settings = termios.tcgetattr(0)
+    new_settings = old_settings[:]
+    new_settings[3] &= ~termios.ICANON
+    try:
+        termios.tcsetattr(0, termios.TCSANOW, new_settings)
+        ch = sys.stdin.read(1)
+        print(ch)
+    finally:
+        termios.tcsetattr(0, termios.TCSANOW, old_settings)
+
+    return ch
 
 
 def move(env, num_steps, left=False, jump_prob=1.0 / 10.0, jump_repeat=4):
@@ -153,8 +192,7 @@ def move(env, num_steps, left=False, jump_prob=1.0 / 10.0, jump_repeat=4):
             break
     return total_rew, done
 
-
-def capture_moment(env, frames, done):
+def capture_moment(env,frames,done):
     if done:
         env.in_danger_pos.append(env.total_reward)
         img = env.observation_history[-1]
@@ -166,10 +204,10 @@ def capture_moment(env, frames, done):
         # img = env.observation_history[frames+5]
         # show_moment(img)
 
-
 def show_moment(img):
     plt.imshow(img)
     plt.show()
+
 
 def exploit(env, sequence, agent):
     """
@@ -254,13 +292,12 @@ class DQNAgent:
         self.model.save_weights(name)
 
 
-# DEFINE GYM
+#DEFINE GYM
 class TrackedEnv(gym.Wrapper):
     """
     An environment that tracks the current trajectory and
     the total number of timesteps ever taken.
     """
-
     def __init__(self, env):
         super(TrackedEnv, self).__init__(env)
         # self.observation_space = spaces.Box(low=0, high=255, shape=(84, 84, 1), dtype=np.uint8)
@@ -275,31 +312,47 @@ class TrackedEnv(gym.Wrapper):
                 arr[buttons.index(button)] = True
             self._actions.append(arr)
         self.action_space = gym.spaces.Discrete(len(self._actions))
-        self.action_history = []
-        self.reward_history = []
+
+
+        #Toggles
+        self.play = False #Allow human trainer
+        self.trainer = False #Enables and tracks training
+        self.rl = False #Enables RL exploration
+        self.resume = False #Resumes RL exploration
+        #Env Counters
+        self.episode = 1
+        self.total_steps_ever = 0
+        self.total_reward = 0
+        self.rl_total_reward = 0
+        self.total_replays = 0
+        #Position Counters
         self._cur_x = 0
         self._max_x = 0
-        self.total_reward = 0
-        self.rl_reward_history = []
-        self.rl_total_reward = 0
-        self.total_steps_ever = 0
-        self.replay_reward_history = []
-        self.total_replays = 0
+        #Scene Trackers
+        self.action_history = []
+        self.reward_history = []
         self.seq_replay = []
+        self.rl_reward_history = []
+        self.replay_reward_history = []
+        #Maslow Trackers
+        self.survival = False  # Tracks done, seeks to prevent done unless potential reached
+        self.safety = False  # Tracks rings, seeks to prevent ring lose
+        self.belonging = False  # Tracks collision, seeks to avoid bad friends
+        self.esteem = False  # Tracks reward, seeks
+        self.potential = False  # Tracks completion || reward > 9000
+        #Queues
         self.memory = deque(maxlen=2000)
         self.is_stuck_pos = deque(maxlen=2000)
         self.is_stuck_pos.append(0)
         self.in_danger_pos = deque(maxlen=2000)
         self.in_danger_pos.append(0)
         self.track_evolution = deque(maxlen=2000)
-        self.rl = False
-        self.resume = False
-        self.survival = False  # Tracks done, seeks to prevent done unless potential reached
-        self.safety = False  # Tracks rings, seeks to prevent ring lose
-        self.belonging = False  # Tracks collision, seeks to avoid bad friends
-        self.esteem = False  # Tracks reward, seeks
-        self.potential = False  # Tracks completion || reward > 9000
-        self.trainer = False
+        #Storage
+        self.table = pd.read_sql_query("SELECT * from game_stats", conn)
+
+
+
+
 
     def best_sequence(self):
         """
@@ -309,7 +362,7 @@ class TrackedEnv(gym.Wrapper):
         max_cumulative = max(self.reward_history)
         for i, rew in enumerate(self.reward_history):
             if rew == max_cumulative:
-                return self.action_history[:i + 1]
+                return self.action_history[:i+1]
         raise RuntimeError('unreachable')
 
     # pylint: disable=E0202
@@ -322,13 +375,9 @@ class TrackedEnv(gym.Wrapper):
         self.steps = 0
         return self.env.reset(**kwargs)
 
-    def resume_rl(self):
-        self.rl = True
-        self.resume = True
-
-    def pause_rl(self):
-        self.rl = False
-        self.resume = False
+    def resume_rl(self, a=True):
+        self.rl = a
+        self.resume = a
 
     def maslow(self, done, info):
         if (self.total_reward >= completion) and done:
@@ -339,16 +388,22 @@ class TrackedEnv(gym.Wrapper):
             self.survival = True
         if int(self.reward_history[-2]) < int(self.reward_history[-1]):
             self.esteem = True
-        else:
-            self.esteem = False
-            self.is_stuck_pos.append(self.total_reward)
-            self.resume_rl()
+            self.trainer = False
+        else:  # If esteem is low (i.e, stuck, in time loop, new scenario ask for help)
+            if not done & self.play:
+                self.trainer = True
+            else:
+                self.esteem = False
+                self.trainer = False
+                self.resume_rl()
+                self.is_stuck_pos.append(self.total_reward)
+
+
+
         if info['rings'] > 0:
             self.safety = True
         else:
             self.safety = False
-        if 1 == 1:  # Next to box, gadget, assistance
-            self.belonging = False
         # self.track_evolution.append({'reward':self.total_reward,'survival':self.survival,'safety':self.safety,'belonging':self.belonging,
         #                              'esteem':self.esteem,'potential':self.potential})
 
@@ -358,7 +413,29 @@ class TrackedEnv(gym.Wrapper):
         x_t1 = x_t1.reshape(1, 1, x_t1.shape[0], x_t1.shape[1])
         return x_t1
 
-    def control(self, a=None):  # pylint: disable=W0221
+    # PROCESSING
+    def analytics(self, a):
+        acts = np.array(self.rl_reward_history)
+        acts = np.sum(acts[-a:])
+        acts = np.round(acts, 4)
+        return acts
+
+    def stats(self):
+        acts1 = self.analytics(1)
+        acts3 = self.analytics(3)
+        acts5 = self.analytics(5)
+        acts7 = self.analytics(7)
+        acts9 = self.analytics(9)
+        acts11 = self.analytics(11)
+        acts33 = self.analytics(33)
+        db.execute("INSERT INTO game_stats VALUES (NULL,?, ?, ?, ?,?,?,?,?,?,?,?,?,?,?)",
+                   (self.episode, self.steps, acts1, acts3, acts5, acts7, acts9, acts11, acts33
+                    , int(self.safety), int(self.esteem)
+                    , int(self.belonging), int(self.potential), int(self.total_reward)))
+
+        conn.commit()
+
+    def control(self, a=None):  # Enable Disrete Actions pylint: disable=W0221
         if not a:
             a = self.action_space.sample()
         return self._actions[a].copy()
@@ -367,18 +444,19 @@ class TrackedEnv(gym.Wrapper):
         self.total_steps_ever += 1
         self.action_history.append(action.copy())
         obs, rew, done, info = self.env.step(action)
+        self.rl_reward_history.append(rew) #True Reward
         obs = self.process_frames(obs)
         self.total_reward += rew
         self._cur_x += rew
-        rew = max(0, self._cur_x - self._max_x)
-        self._max_x = max(self._max_x, self._cur_x)
+        rew = max(0, self._cur_x - self._max_x) #Net 0 reward
+        self._max_x = max(self._max_x, self._cur_x) #Max level reached
         self.reward_history.append(self.total_reward)
         if self.steps > 1:
             self.maslow(done, info)
         self.steps += 1
-        # self.render()
+        self.stats()
+        self.render()
         return obs, rew, done, info
-
 
 if __name__ == '__main__':
     try:
