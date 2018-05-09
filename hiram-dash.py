@@ -7,6 +7,7 @@
 # Implicit Imitation: https://www.aaai.org/Papers/JAIR/Vol19/JAIR-1916.pdf
 
 # ENV_LOCAL
+local_env = False
 # ENV_REMOTE
 import gym_remote.client as grc
 import gym_remote.exceptions as gre
@@ -39,15 +40,26 @@ from sonic_util import AllowBacktracking, make_env
 # Load ML
 # trained_model = load_ml_model('reward.ml')
 
-# GLOBALS
-local_env = False
+# GLOBAL
+seed = 123
+np.random.seed(seed)
 EXPLOIT_BIAS = 0.2
+RL_PLAY_PCT = 2 #2
 TOTAL_TIMESTEPS = int(1e6)
-completion = 9000  # Estimated End
+COMPLETION = 9000  # Estimated End
 batches = 4
+TRAINING_STEPS = 150000 #20000
+BUFFER_SIZE = 1024
+MIN_BUFFER_SIZE = 256
+STEPS_PER_UPDATE = 3
+ITERS_PER_LOG = 200
+BATCH_SIZE = 64
+EPSILON = 0.1
+LEARNING_RATE = 0.001
 # References
 # https://github.com/keon/deep-q-learning/blob/master/dqn.py
 
+print(seed,RL_PLAY_PCT,TRAINING_STEPS,LEARNING_RATE)
 
 # Create Storage
 conn = sqlite3.connect('retro.db')
@@ -90,11 +102,12 @@ def main():
         print('connecting to remote environment')
         env = grc.RemoteEnv('tmp/sock')
         print('starting episode')
+    # env = BatchedFrameStack(BatchedGymEnv([[env]]), num_images=4, concat=False)
     env = TrackedEnv(env)
     # env = AllowBacktracking(make_env(stack=False, scale_rew=False))
-    # env = BatchedFrameStack(BatchedGymEnv([[env]]), num_images=4, concat=False)
-    #config = tf.ConfigProto()
-    #config.gpu_options.allow_growth = True # pylint: disable=E1101
+
+    # config = tf.ConfigProto()
+    # config.gpu_options.allow_growth = True # pylint: disable=E1101
     #
     # if level_choice:
     #     env.level_choice = level_choice
@@ -108,25 +121,8 @@ def main():
     env.trainer = False  # Begin with mentor led exploration
     env.resume_rl(True)  # Begin with RL exploration
 
-    TRAINING_STEPS = 500000
-    BUFFER_SIZE = 1024
-    MIN_BUFFER_SIZE = 256
-    STEPS_PER_UPDATE = 3
-    ITERS_PER_LOG = 200
-    BATCH_SIZE = 64
-    EPSILON = 0.1
-    LEARNING_RATE = 0.001
-
     while env.total_steps_ever <= TOTAL_TIMESTEPS:  # Interact with Retro environment until Total TimeSteps expire.
         #env.render()
-        if env.steps > 1:
-            l = len(env.reward_history)
-            a = int(env.reward_history[-1]) if l > 0 else 1
-            da = pd.DataFrame(gb(a).has_action(list))
-            stuck = gb('stuck').at_place_spatial(list)
-            df = pd.DataFrame(stuck)
-            print('stuck',df['curr_loc'][-1:])
-            print('actions',np.argmax(df['curr_reward']))
 
         while env.trainer:
             print('Entering Self Play')
@@ -149,8 +145,8 @@ def main():
                 env = TrackedEnv(env)
                 env.reset()  # Initialize Gaming Environment
 
-        if env.episode %3 == 0:
-            print('Entering RL mode')
+        if env.episode % RL_PLAY_PCT == 0:
+
             tf.reset_default_graph()
             with tf.Session() as sess:
                 def make_net(name):
@@ -166,7 +162,6 @@ def main():
                 optimize = dqn.optimize(learning_rate=LEARNING_RATE)
 
                 sess.run(tf.global_variables_initializer())
-                print('training')
 
                 dqn.train(num_steps=TRAINING_STEPS,
                           player=bplayer,
@@ -175,15 +170,17 @@ def main():
                           target_interval=200,
                           batch_size=64,
                           min_buffer_size=200,
-                          handle_ep=lambda _, rew: print('DQN got reward: ' + str(rew) + str(env.steps)))
+                          handle_ep=lambda _, rew: print('Exited DQN with : ' + str(rew) + str(env.steps)))
 
                 dqn2 = DQN(*rainbow_models(sess,
                                           env.action_space.n,
                                           gym_space_vectorizer(env.observation_space),
                                           min_val=-200,
                                           max_val=200))
-                player = NStepPlayer(bplayer(env, dqn2.online_net), 3)
+                player = NStepPlayer(BasicPlayer(env, dqn2.online_net), STEPS_PER_UPDATE)
                 optimize = dqn2.optimize(learning_rate=1e-4)
+                print('Exiting DQN mode', str(env.total_reward))
+
                 sess.run(tf.global_variables_initializer())
                 dqn2.train(num_steps=TRAINING_STEPS,#2000000,  # Make sure an exception arrives before we stop.
                           player=player,
@@ -192,16 +189,18 @@ def main():
                           train_interval=1,
                           target_interval=8192,
                           batch_size=32,
-                          min_buffer_size=20000
-                           )
+                          min_buffer_size=20000)
+
+                print('Exiting Rainbow mode',str(env.total_reward))
 
 
                 sess.close()
 
         if new_ep:  # If new episode....
-            print('Entering JERK mode')
+
             if (solutions and
                     random.random() < EXPLOIT_BIAS + env.total_steps_ever / TOTAL_TIMESTEPS):
+                #The value of exploitive replays increases with experience.
                 print('starting replay')
                 solutions = sorted(solutions, key=lambda x: np.mean(x[0]))
                 best_pair = solutions[-1]
@@ -213,6 +212,7 @@ def main():
             else:
                 env.is_done()
                 new_ep = False
+        print('Entering JERK mode')
         rew, new_ep = move(env, 100)
         if not new_ep and rew <= 0:
             env.resume_rl()
@@ -347,6 +347,13 @@ class TrackedEnv(gym.Wrapper):
         # Storage
         self.table = pd.read_sql_query("SELECT * from game_stats", conn)
 
+
+
+
+
+
+
+
     def is_done(self):
         if self.done:
             self.reset()
@@ -378,7 +385,7 @@ class TrackedEnv(gym.Wrapper):
         self.resume = a
 
     def maslow(self, done, info):
-        if (self.total_reward >= completion) and done:
+        if (self.total_reward >= COMPLETION) and done:
             self.potential = True
         else:
             self.potential = False
@@ -489,11 +496,18 @@ class TrackedEnv(gym.Wrapper):
         obs, rew, done, info = self.env.step(action)
         self.last_obs = obs
         self.insert_stats(action,obs,rew,done,info)
+        rew = max(0, self.curr_loc - self._max_x)
         if done:
+            rew = -10
             self.done = done
             self.solutions.append(([max(self.reward_history)], self.best_sequence()))
         # self.render()
         return obs, rew, done, info
+
+
+
+
+
 
 
 if __name__ == '__main__':
