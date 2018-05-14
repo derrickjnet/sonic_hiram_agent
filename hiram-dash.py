@@ -5,9 +5,9 @@
 # DL from Human Pref: https://blog.openai.com/deep-reinforcement-learning-from-human-preferences/
 # DL from Human Pref: https://arxiv.org/abs/1706.03741
 # Implicit Imitation: https://www.aaai.org/Papers/JAIR/Vol19/JAIR-1916.pdf
-# Note try Prioritized Replay
+# Note try Replaying top 3 attempts
 # ENV_LOCAL
-local_env = False
+local_env = True
 render = False
 import random
 import sqlite3
@@ -32,14 +32,14 @@ from graphdb import GraphDB
 
 # Set Variables
 seed = 123
-done_penalty = False
+done_penalty = -10
 np.random.seed(seed)
 EXPLOIT_BIAS = 0.2
 RL_PLAY_PCT = 2  # 2
 TOTAL_TIMESTEPS = int(1e6)
 COMPLETION = 9000  # Estimated End
 batches = 4
-TRAINING_STEPS = 500  # 20000
+TRAINING_STEPS = 4500  # 20000
 BUFFER_SIZE = 1024
 MIN_BUFFER_SIZE = 256
 STEPS_PER_UPDATE = 3
@@ -103,7 +103,6 @@ def main():
     print(state_size, action_size)
     env.assist = False
     env.trainer = False  # Begin with mentor led exploration
-    env.resume_rl(True)  # Begin with RL exploration
     env.reset()  # Initialize Gaming Environment
     while env.total_steps_ever <= TOTAL_TIMESTEPS:  # Interact with Retro environment until Total TimeSteps expire.
         while env.trainer:
@@ -160,6 +159,7 @@ def main():
             tf.reset_default_graph()  # Initialize TF
             print('Entering Rainbow')
             with tf.Session() as sess:
+                env.agent = 'Rainbow'
                 dqn2 = DQN(*rainbow_models(sess,
                                            env.action_space.n,
                                            gym_space_vectorizer(env.observation_space),
@@ -169,7 +169,7 @@ def main():
                 optimize = dqn2.optimize(learning_rate=1e-4)
 
                 sess.run(tf.global_variables_initializer())
-                env.agent = 'Rainbow'
+
                 dqn2.train(num_steps=TRAINING_STEPS,  # 2000000,  # Make sure an exception arrives before we stop.
                            player=player,
                            replay_buffer=PrioritizedReplayBuffer(500000, 0.5, 0.4, epsilon=0.1),
@@ -184,20 +184,20 @@ def main():
             env.agent = 'Replay'
             solutions = sorted(solutions, key=lambda x: np.mean(x[0]))
             best_pair = solutions[-1]
-            new_rew = exploit(env, best_pair[1])
+            new_rew = exploit(env, best_pair[1]) #Remove Reset
             best_pair[0].append(new_rew)
             print('replayed best with reward %f' % new_rew)
             print(best_pair[0])
             env.is_done()
-            continue
-        else:
-            env.agent = 'JERK'
+
 
         if env.agent == 'JERK':
             done = False
+            env.agent = 'JERK'
             while not done:
-                env.agent = 'JERK'
                 rew, done = move(env, 100)
+                if not done and rew <= 0:
+                    _, done = move(env, 70, left=True)
                 if done:
                     env.reset()
 
@@ -252,17 +252,23 @@ def exploit(env, sequence):
 
     Returns the final cumulative reward.
     """
-    state = env.reset()
+    env.agent = 'Replay'
     done = False
+    sequence2 = env.best_game #bypass normal replay
     idx = 0
+
+    # Logic for replaying game
+    # rewards = gb('rewards').game_rewards(list)
+    # sequence = gb(9779.833488464355).game_sequences(list)
+    # df = pd.DataFrame(sequence).T
+    # print(df.iloc[0][0])
+
     while not done:
         if idx >= len(sequence):
             move(env, 15)
             env.control()
-            # env.resume_rl() #Resume DQN from last replay
         else:
             new_state, rew, done, _ = env.step(sequence[idx])
-            state = new_state
         idx += 1
     env.total_replays += 1
     env.replay_reward_history.append(env.total_reward)
@@ -317,9 +323,10 @@ class TrackedEnv(gym.Wrapper):
         self.seq_replay = []
         self.step_rew_history = []
         self.replay_reward_history = []
-        self.jerk = 0
-        self.dqn = 0
-        self.rainbow = 0
+        self.best_game = []
+        self.jerk = deque(maxlen=2000)
+        self.dqn = deque(maxlen=2000)
+        self.rainbow = deque(maxlen=2000)
         # Maslow Trackers
         self.survival = False  # Tracks done, seeks to prevent done unless potential reached
         self.safety = False  # Tracks rings, seeks to prevent ring lose
@@ -366,12 +373,11 @@ class TrackedEnv(gym.Wrapper):
         self.total_reward = 0
         self.steps = 0
         self.episode += 1
+        rewards = gb('rewards').game_rewards(list)
+        if rewards:
+            self.best_game = gb(max(rewards)).game_sequences(list)
         self.agent = self.select_agent()
         return self.env.reset(**kwargs)
-
-    def resume_rl(self, a=True):
-        self.rl = a
-        self.resume = a
 
     def maslow(self, done, info):
         if (self.total_reward >= COMPLETION) and done:
@@ -388,7 +394,6 @@ class TrackedEnv(gym.Wrapper):
                     self.trainer = True
             else:
                 self.esteem = False
-                # self.resume_rl()
                 self.is_stuck_pos.append(self.total_reward)
         # if info['rings'] > 0:
         #     self.safety = True
@@ -418,11 +423,11 @@ class TrackedEnv(gym.Wrapper):
         self._max_x = max(self._max_x, self.curr_loc)  #Max level reached
         self.reward_history.append(self.total_reward)
         if self.agent == 'Rainbow':
-            self.rainbow = max(self.rainbow, self.total_reward)
+            self.rainbow.append(self.total_reward)
         if self.agent == 'DQN':
-            self.dqn = max(self.dqn, self.total_reward)
+            self.dqn.append(self.total_reward)
         if self.agent == 'JERK':
-            self.jerk = max(self.jerk, self.total_reward)
+            self.jerk.append(self.total_reward)
 
         if self.steps > 1:
             self.maslow(done, info)
@@ -478,6 +483,8 @@ class TrackedEnv(gym.Wrapper):
                                       , 'stop_time': stop_time, 'agent': self.agent})
                 gb.store_relation(self.agent, 'is_done_at',
                                   {'prev_loc': prev_loc, 'total_reward': self.total_reward})
+                gb.store_relation('rewards', 'game_rewards', max(self.reward_history))
+                gb.store_relation(max(self.reward_history), 'game_sequences', self.best_sequence())
 
             # gb.store_relation(self.steps, 'is_during_chron', {'curr_action': curr_action, 'curr_reward': acts1})
             # gb.store_relation(self.steps, 'is_after_chron', {'curr_action': curr_action, 'curr_reward': acts1})
@@ -509,7 +516,7 @@ class TrackedEnv(gym.Wrapper):
         stop_time = time.time()
         self.last_obs = obs
         self.insert_stats(action, obs, rew, done, info, start_time, stop_time)
-        rew = max(0, self.curr_loc - self._max_x)
+        rew = max(0, self.curr_loc - self._max_x) if self.agent != 'JERK' else rew
         if done:
             self.done = done
             self.solutions.append(([max(self.reward_history)], self.best_sequence()))
