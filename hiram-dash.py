@@ -39,7 +39,7 @@ RL_PLAY_PCT = 2  # 2
 TOTAL_TIMESTEPS = int(1e6)
 COMPLETION = 9000  # Estimated End
 batches = 4
-TRAINING_STEPS = 4500  # 20000
+TRAINING_STEPS = 4449  # 20000
 BUFFER_SIZE = 1024
 MIN_BUFFER_SIZE = 256
 STEPS_PER_UPDATE = 3
@@ -180,7 +180,7 @@ def main():
                            min_buffer_size=20000)
                 sess.close()
 
-        if env.agent == 'Replay' and env.episode >= 7:
+        if env.agent == 'Replay' and env.episode >= 3:
             env.agent = 'Replay'
             solutions = sorted(solutions, key=lambda x: np.mean(x[0]))
             best_pair = solutions[-1]
@@ -254,21 +254,18 @@ def exploit(env, sequence):
     """
     env.agent = 'Replay'
     done = False
-    sequence2 = env.best_game #bypass normal replay
+    rewards = gb('rewards').game_rewards(list)
+    sequence2 = gb(max(rewards)).game_sequences(list)
+    df = pd.DataFrame(sequence2).T
     idx = 0
 
-    # Logic for replaying game
-    # rewards = gb('rewards').game_rewards(list)
-    # sequence = gb(9779.833488464355).game_sequences(list)
-    # df = pd.DataFrame(sequence).T
-    # print(df.iloc[0][0])
-
     while not done:
-        if idx >= len(sequence):
+        if idx >= len(df):
             move(env, 15)
             env.control()
         else:
-            new_state, rew, done, _ = env.step(sequence[idx])
+            # new_state, rew, done, _ = env.step(sequence[idx])
+            new_state, rew, done, _ = env.step(df.iloc[idx][0])
         idx += 1
     env.total_replays += 1
     env.replay_reward_history.append(env.total_reward)
@@ -359,7 +356,7 @@ class TrackedEnv(gym.Wrapper):
         raise RuntimeError('unreachable')
 
     def select_agent(self):
-        foo = ['DQN', 'Rainbow', 'JERK', 'Replay']
+        foo = ['DQN', 'Replay','Rainbow', 'JERK', 'Replay']
         agent = random.choice(foo) if self.episode > 1 else 'JERK'
         return agent
 
@@ -373,9 +370,6 @@ class TrackedEnv(gym.Wrapper):
         self.total_reward = 0
         self.steps = 0
         self.episode += 1
-        rewards = gb('rewards').game_rewards(list)
-        if rewards:
-            self.best_game = gb(max(rewards)).game_sequences(list)
         self.agent = self.select_agent()
         return self.env.reset(**kwargs)
 
