@@ -7,7 +7,7 @@
 # Implicit Imitation: https://www.aaai.org/Papers/JAIR/Vol19/JAIR-1916.pdf
 # Note try Replaying top 3 attempts
 # ENV_LOCAL
-local_env = True
+local_env = False
 render = False
 import random
 import sqlite3
@@ -39,7 +39,7 @@ RL_PLAY_PCT = 2  # 2
 TOTAL_TIMESTEPS = int(1e6)
 COMPLETION = 9000  # Estimated End
 batches = 4
-TRAINING_STEPS = 4449  # 20000
+TRAINING_STEPS = 20000  # 20000
 BUFFER_SIZE = 1024
 MIN_BUFFER_SIZE = 256
 STEPS_PER_UPDATE = 3
@@ -97,17 +97,16 @@ def main():
     env = TrackedEnv(env)
 
     new_ep = True  # New Episode Flag
+    tf.reset_default_graph()
     solutions = env.solutions  # Track Solutions
     state_size = env.observation_space.shape[0]
     action_size = env.action_space.n
     print(state_size, action_size)
     env.assist = False
     env.trainer = False  # Begin with mentor led exploration
-    env.reset()  # Initialize Gaming Environment
     while env.total_steps_ever <= TOTAL_TIMESTEPS:  # Interact with Retro environment until Total TimeSteps expire.
         while env.trainer:
             print('Entering Self Play')
-            env.is_done()
             keys = getch()
             if keys == 'A':
                 env.control(-1)
@@ -121,13 +120,10 @@ def main():
                 env.trainer = False
                 continue
             if keys == ' ':
-                env.close()
                 env = make(game='SonicTheHedgehog-Genesis', state=levels[random.randrange(0, 13, 1)])
                 env = TrackedEnv(env)
-                env.reset()  # Initialize Gaming Environment
 
         if env.agent == 'DQN':
-            tf.reset_default_graph()  # Initialize TF
             print('Entering DQN')
             with tf.Session() as sess:
                 def make_net(name, reuse=tf.AUTO_REUSE):
@@ -154,9 +150,11 @@ def main():
                           min_buffer_size=200,
                           handle_ep=lambda _, rew: print('Exited DQN with : ' + str(rew) + str(env.steps)))
                 sess.close()
+                env.close()
+                tf.reset_default_graph()  #reInitialize TF
+
 
         if env.agent == 'Rainbow':
-            tf.reset_default_graph()  # Initialize TF
             print('Entering Rainbow')
             with tf.Session() as sess:
                 env.agent = 'Rainbow'
@@ -179,28 +177,38 @@ def main():
                            batch_size=32,
                            min_buffer_size=20000)
                 sess.close()
+                env.close()
+                tf.reset_default_graph()  # Initialize TF
 
-        if env.agent == 'Replay' and env.episode >= 3:
+        if env.agent == 'Replay':
             env.agent = 'Replay'
             solutions = sorted(solutions, key=lambda x: np.mean(x[0]))
             best_pair = solutions[-1]
             new_rew = exploit(env, best_pair[1]) #Remove Reset
             best_pair[0].append(new_rew)
-            print('replayed best with reward %f' % new_rew)
-            print(best_pair[0])
-            env.is_done()
 
 
         if env.agent == 'JERK':
-            done = False
             env.agent = 'JERK'
-            while not done:
-                rew, done = move(env, 100)
-                if not done and rew <= 0:
-                    _, done = move(env, 70, left=True)
-                if done:
-                    env.reset()
-
+            while True:
+                if new_ep:
+                    if (solutions and
+                            random.random() < EXPLOIT_BIAS + env.total_steps_ever / TOTAL_TIMESTEPS):
+                        solutions = sorted(solutions, key=lambda x: np.mean(x[0]))
+                        best_pair = solutions[-1]
+                        new_rew = exploit(env, best_pair[1])
+                        best_pair[0].append(new_rew)
+                        continue
+                    else:
+                        env.reset()
+                        new_ep = False
+                rew, new_ep = move(env, 100)
+                if not new_ep and rew <= 0:
+                    # print('backtracking due to negative reward: %f' % rew)
+                    _, new_ep = move(env, 70, left=True)
+                if new_ep:
+                    solutions.append(([max(env.reward_history)], env.best_sequence()))
+            env.close()
 
 def getch():  # Enable Keyboard
     import sys, termios
@@ -241,8 +249,6 @@ def move(env, num_steps, left=False, jump_prob=1.0 / 10.0, jump_repeat=4):
         _, rew, done, _ = env.step(action)
         total_rew += rew
         steps_taken += 1
-        if done:
-            break
     return total_rew, done
 
 
@@ -252,16 +258,17 @@ def exploit(env, sequence):
 
     Returns the final cumulative reward.
     """
+    env.reset()
     env.agent = 'Replay'
     done = False
     rewards = gb('rewards').game_rewards(list)
     sequence2 = gb(max(rewards)).game_sequences(list)
     df = pd.DataFrame(sequence2).T
     idx = 0
-
+    #find fastest sequence
     while not done:
         if idx >= len(df):
-            move(env, 15)
+            rew, done = move(env, 15)
             env.control()
         else:
             # new_state, rew, done, _ = env.step(sequence[idx])
@@ -296,7 +303,7 @@ class TrackedEnv(gym.Wrapper):
 
         self.level_choice = ''
         # Toggles
-        self.agent = ''
+        self.agent = 'JERK'
         self.assist = False  # Allow human trainer
         self.trainer = False  # Enables and tracks training
         self.rl = False  # Enables RL exploration
@@ -340,10 +347,6 @@ class TrackedEnv(gym.Wrapper):
         # Storage
         self.table = pd.read_sql_query("SELECT * from game_stats", conn)
 
-    def is_done(self):
-        if self.done:
-            self.reset()
-
     def best_sequence(self):
         """
         Get the prefix of the trajectory with the best
@@ -356,8 +359,8 @@ class TrackedEnv(gym.Wrapper):
         raise RuntimeError('unreachable')
 
     def select_agent(self):
-        foo = ['DQN', 'Replay','Rainbow', 'JERK', 'Replay']
-        agent = random.choice(foo) if self.episode > 1 else 'JERK'
+        foo = ['DQN', 'Replay','Rainbow', 'JERK']
+        agent = random.choice(foo) if self.episode > 5 else 'JERK'
         return agent
 
     # pylint: disable=E0202
@@ -496,8 +499,6 @@ class TrackedEnv(gym.Wrapper):
         if not a:
             a = self.action_space.sample()
         obs, rew, done, info = self.step(self._actions[a].copy())
-        if done:
-            self.reset()
         return self._actions[a].copy()
 
     def step(self, action, *args):
@@ -505,6 +506,7 @@ class TrackedEnv(gym.Wrapper):
         if test < 1:
             action = self._actions[action].copy()
         self.total_steps_ever += 1
+        print(self.total_steps_ever) if self.total_steps_ever % 2500 == 0 else ''
         start_time = time.time()
         obs, rew, done, info = self.env.step(action)
         stop_time = time.time()
