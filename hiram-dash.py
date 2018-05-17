@@ -96,17 +96,9 @@ def main():
         print('connecting to remote environment')
         env = grc.RemoteEnv('tmp/sock')
         print('starting episode')
-    # env = BatchedFrameStack(BatchedGymEnv([[env]]), num_images=4, concat=False)
-    env = TrackedEnv(env)
-    # env = AllowBacktracking(make_env(stack=False, scale_rew=False))
 
-    # config = tf.ConfigProto()
-    # config.gpu_options.allow_growth = True # pylint: disable=E1101
-    #
-    # if level_choice:
-    #     env.level_choice = level_choice
-    env.reset()  # Initialize Gaming Environment
-    replay_increment = 1000
+    env = TrackedEnv(env)
+
     solutions = env.solutions  # Track Solutions
     state_size = env.observation_space
     action_size = env.action_space.n
@@ -155,7 +147,6 @@ def main():
                 sess.run(tf.global_variables_initializer())
 
                 env.agent = 'DQN'
-                print(env.agent)
                 dqn.train(num_steps=TRAINING_STEPS,
                           player=bplayer,
                           replay_buffer=PrioritizedReplayBuffer(500000, 0.5, 0.4, epsilon=0.1),
@@ -176,7 +167,6 @@ def main():
 
                 sess.run(tf.global_variables_initializer())
                 env.agent = 'Rainbow'
-                print(env.agent)
                 dqn2.train(num_steps=TRAINING_STEPS,#2000000,  # Make sure an exception arrives before we stop.
                           player=player,
                           replay_buffer=PrioritizedReplayBuffer(500000, 0.5, 0.4, epsilon=0.1),
@@ -204,7 +194,6 @@ def main():
                     env.reset()
                     new_ep = False
             env.agent = 'JERK'
-            print(env.agent)
             rew, new_ep = move(env, 100)
             if not new_ep and rew <= 0:
                 #print('backtracking due to negative reward: %f' % rew)
@@ -304,7 +293,7 @@ class TrackedEnv(gym.Wrapper):
 
         self.level_choice = ''
         # Toggles
-        self.agent = ''
+        self.agent = 'JERK'
         self.assist = False  # Allow human trainer
         self.trainer = False  # Enables and tracks training
         self.rl = False  # Enables RL exploration
@@ -359,8 +348,8 @@ class TrackedEnv(gym.Wrapper):
         raise RuntimeError('unreachable')
 
     # pylint: disable=E0202
-    def reset(self, **kwargs):
-        print('Episode',self.episode,self.agent,self.steps,self.total_reward)
+    def reset(self, spawn=True, **kwargs):
+        print('Episode', self.episode, self.agent, self.steps, self.total_reward)
         self.action_history = []
         self.reward_history = []
         self.curr_loc = 0
@@ -368,7 +357,27 @@ class TrackedEnv(gym.Wrapper):
         self.total_reward = 0
         self.steps = 0
         self.episode += 1
+        if spawn and self.episode > 1:
+            self.env.reset(**kwargs)
+            new_state, rew, done = self.spawn()
+            return new_state
         return self.env.reset(**kwargs)
+
+    def spawn(self):
+        rewards = gb('rewards').game_rewards(list)
+        min_spawn = float(np.min(rewards))
+        mode_spawn = float(np.median(rewards))
+        max_spawn = float(np.max(rewards))
+
+        play_seq = gb(max_spawn).game_sequences(list)
+        play_df = pd.DataFrame(play_seq).T
+        idx = 0
+        done=False
+        print(play_df.iloc[idx][0])
+        while idx < (len(play_df)-5) or not done:
+            new_state, rew, done, _ = self.step(play_df.iloc[idx][0])
+            idx += 1
+        return new_state, rew, done
 
     def resume_rl(self, a=True):
         self.rl = a
