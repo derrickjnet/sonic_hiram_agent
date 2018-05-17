@@ -20,7 +20,7 @@ np.random.seed(seed)
 conn = sqlite3.connect('retro.db')
 db_method = 'replace'
 db = conn.cursor()
-gb = GraphDB('graph1.db')
+gb = GraphDB('graph.db')
 
 
 # Setup Storage
@@ -159,7 +159,7 @@ class AllowBacktracking(gym.Wrapper):
         raise RuntimeError('unreachable')
 
     # pylint: disable=E0202
-    def reset(self, **kwargs):
+    def reset(self, spawn=True, **kwargs):
         print('Episode', self.episode, self.agent, self.steps, self.total_reward)
         self.action_history = []
         self.reward_history = []
@@ -168,7 +168,30 @@ class AllowBacktracking(gym.Wrapper):
         self.total_reward = 0
         self.steps = 0
         self.episode += 1
+        if spawn and self.episode > 1:
+            self.env.reset(**kwargs)
+            new_state, rew, done = self.spawn()
+            return new_state
         return self.env.reset(**kwargs)
+
+    def spawn(self):
+        rewards = gb('rewards').game_rewards(list)
+        min_spawn = float(np.min(rewards))
+        mode_spawn = float(np.median(rewards))
+        max_spawn = float(np.max(rewards))
+
+        play_seq = gb(max_spawn).game_sequences(list)
+        play_df = pd.DataFrame(play_seq).T
+        idx = 0
+        idx_end = (len(play_df)-5)
+        x_loc = 0
+        while idx < idx_end:
+            new_state, rew, done, _ = self.step(play_df.iloc[idx][0])
+            if done:
+                self.reset()
+            x_loc += rew
+            idx += 1
+        return new_state, rew, done
 
     def resume_rl(self, a=True):
         self.rl = a

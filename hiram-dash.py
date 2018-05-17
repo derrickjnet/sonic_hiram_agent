@@ -372,10 +372,13 @@ class TrackedEnv(gym.Wrapper):
         play_seq = gb(max_spawn).game_sequences(list)
         play_df = pd.DataFrame(play_seq).T
         idx = 0
-        done=False
-        print(play_df.iloc[idx][0])
-        while idx < (len(play_df)-5) or not done:
+        idx_end = (len(play_df)-5)
+        x_loc = 0
+        while idx < idx_end:
             new_state, rew, done, _ = self.step(play_df.iloc[idx][0])
+            if done:
+                self.reset()
+            x_loc += rew
             idx += 1
         return new_state, rew, done
 
