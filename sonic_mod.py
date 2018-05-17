@@ -168,7 +168,7 @@ class AllowBacktracking(gym.Wrapper):
         self.total_reward = 0
         self.steps = 0
         self.episode += 1
-        if spawn and self.episode > 1:
+        if spawn and self.episode > 15:
             self.env.reset(**kwargs)
             new_state, rew, done = self.spawn()
             return new_state
