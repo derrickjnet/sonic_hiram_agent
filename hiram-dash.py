@@ -41,11 +41,11 @@ pca = PCA(.85)
 done_penalty = -10
 np.random.seed(seed)
 EXPLOIT_BIAS = 0.001
-RL_PLAY_PCT = 2 #2
+RL_PLAY_PCT = 1 #2
 TOTAL_TIMESTEPS = int(1e6)
 COMPLETION = 9000  # Estimated End
 batches = 4
-TRAINING_STEPS = 2500 #20000
+TRAINING_STEPS = 2000000 #20000
 BUFFER_SIZE = 1024
 MIN_BUFFER_SIZE = 256
 STEPS_PER_UPDATE = 3
@@ -109,6 +109,7 @@ def main():
     env.assist = False
     env.trainer = False  # Begin with mentor led exploration
     env.resume_rl(True)  # Begin with RL exploration
+    env.reset()
 
     while env.total_steps_ever <= TOTAL_TIMESTEPS:  # Interact with Retro environment until Total TimeSteps expire.
         while env.trainer:
@@ -130,6 +131,9 @@ def main():
                 env = make(game='SonicTheHedgehog-Genesis', state=levels[random.randrange(0, 13, 1)])
                 env = TrackedEnv(env)
                 env.reset()  # Initialize Gaming Environment
+                env.trainer = True
+            if env.steps > 1:
+                print('Prev Rew',env.step_rew_history[-1], 'Curr_Loc',env.reward_history[-1],'Med Rew',np.median(env.step_rew_history[-3:]))
 
         if env.episode % RL_PLAY_PCT == 0:
 
@@ -158,28 +162,6 @@ def main():
                           batch_size=64,
                           min_buffer_size=200,
                           handle_ep=lambda _, rew: print('Exited DQN with : ' + str(rew) + str(env.steps)))
-
-                dqn2 = DQN(*rainbow_models(sess,
-                                          env.action_space.n,
-                                          gym_space_vectorizer(env.observation_space),
-                                          min_val=-200,
-                                          max_val=200))
-                player = NStepPlayer(BasicPlayer(env, dqn2.online_net), STEPS_PER_UPDATE)
-                optimize = dqn2.optimize(learning_rate=1e-4)
-
-
-                sess.run(tf.global_variables_initializer())
-                env.agent = 'Rainbow'
-                dqn2.train(num_steps=TRAINING_STEPS,#2000000,  # Make sure an exception arrives before we stop.
-                          player=player,
-                          replay_buffer=PrioritizedReplayBuffer(500000, 0.5, 0.4, epsilon=0.1),
-                          optimize_op=optimize,
-                          train_interval=1,
-                          target_interval=8192,
-                          batch_size=32,
-                          min_buffer_size=20000)
-
-                print('Exiting Rainbow mode',str(env.total_reward))
 
         new_ep = True  # New Episode Flag
         while new_ep:
@@ -323,6 +305,8 @@ class TrackedEnv(gym.Wrapper):
         self.jerk = 0
         self.dqn = 0
         self.rainbow = 0
+        self.score = 0
+        self.rings = 0
         # Maslow Trackers
         self.survival = False  # Tracks done, seeks to prevent done unless potential reached
         self.safety = False  # Tracks rings, seeks to prevent ring lose
@@ -351,7 +335,7 @@ class TrackedEnv(gym.Wrapper):
         raise RuntimeError('unreachable')
 
     # pylint: disable=E0202
-    def reset(self, spawn=True, **kwargs):
+    def reset(self, spawn=False, **kwargs):
         print('Episode', self.episode, self.agent, self.steps, self.total_reward)
         self.action_history = []
         self.reward_history = []
@@ -431,13 +415,7 @@ class TrackedEnv(gym.Wrapper):
         self.step_rew_history.append(rew)  # Step Reward
         self.total_reward += rew
         self.curr_loc += rew
-        rew = max(0, self.curr_loc - self._max_x)  # Net 0 reward
-        self._max_x = max(self._max_x, self.curr_loc)  #Max level reached
         self.reward_history.append(self.total_reward)
-        if self.agent == 'Rainbow':
-            self.rainbow = max(self.rainbow,self.total_reward)
-        if self.agent == 'DQN':
-            self.dqn = max(self.dqn, self.total_reward)
 
 
 
@@ -520,7 +498,7 @@ class TrackedEnv(gym.Wrapper):
         stop_time = time.time()
         self.last_obs = obs
         self.insert_stats(action,obs,rew,done,info,start_time,stop_time)
-        rew = max(0, self.curr_loc - self._max_x)
+        rew = max(0, self.curr_loc - self._max_x) if np.median(self.step_rew_history[-3:]) != rew else -5 if not done else -10
         if done:
             self.done = done
             if self.reward_history:

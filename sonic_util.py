@@ -78,7 +78,7 @@ class AllowBacktracking(gym.Wrapper):
         self.reward_history = []
         self.step_rew_history = []
 
-    def reset(self, spawn=True, **kwargs): # pylint: disable=E0202
+    def reset(self, spawn=False, **kwargs): # pylint: disable=E0202
         self._cur_x = 0
         self._max_x = 0
         self.curr_loc = 0
@@ -100,7 +100,8 @@ class AllowBacktracking(gym.Wrapper):
         stop_time = time.time()
         self.insert_stats(action,obs,rew,done,info,start_time,stop_time)
         self._cur_x += rew
-        rew = max(0, self._cur_x - self._max_x)
+        #Acquire-Bond-Comprehend-Defend
+        rew = max(0, self._cur_x - self._max_x) if np.median(self.step_rew_history[-3:]) != rew else -5 if not done else -10
         self._max_x = max(self._max_x, self._cur_x)
         self.steps += 1
         return obs, rew, done, info

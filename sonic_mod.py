@@ -325,6 +325,7 @@ class AllowBacktracking(gym.Wrapper):
         stop_time = time.time()
         self.last_obs = obs
         self.insert_stats(action, obs, rew, done, info, start_time, stop_time)
-        rew = max(0, self.curr_loc - self._max_x)
+        #Acquire-Bond-Comprehend-Defend
+        rew = max(0, self.curr_loc - self._max_x) if np.median(self.step_rew_history[-3:]) != rew else -5 if not done else -10
         # self.render()
         return obs, rew, done, info
