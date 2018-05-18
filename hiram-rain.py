@@ -16,7 +16,7 @@ import gym_remote.exceptions as gre
 
 from sonic_mod import AllowBacktracking, make_env
 
-local_env = False
+local_env = True
 
 def main():
     """Run DQN until the environment throws an exception."""

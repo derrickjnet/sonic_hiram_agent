@@ -15,7 +15,7 @@ from anyrl.rollouts import BatchedPlayer, PrioritizedReplayBuffer, NStepPlayer
 from anyrl.spaces import gym_space_vectorizer
 import gym_remote.exceptions as gre
 
-from sonic_mod import AllowBacktracking, make_env
+from sonic_util import AllowBacktracking, make_env
 
 def main():
     """Run DQN until the environment throws an exception."""
@@ -24,6 +24,7 @@ def main():
     config = tf.ConfigProto()
     config.gpu_options.allow_growth = True # pylint: disable=E1101
     with tf.Session(config=config) as sess:
+        tf.global_variables_initializer
         dqn = DQN(*rainbow_models(sess,
                                   env.action_space.n,
                                   gym_space_vectorizer(env.observation_space),
@@ -40,8 +41,7 @@ def main():
                   target_interval=8192,
                   batch_size=32,
                   min_buffer_size=20000)
-
-
+        saver = tf.train.Saver()
 
 if __name__ == '__main__':
     try:

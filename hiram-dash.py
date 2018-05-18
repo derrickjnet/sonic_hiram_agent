@@ -24,6 +24,8 @@ import numpy as np
 # ML/RL
 import pandas as pd
 import tensorflow as tf
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
 from anyrl.algos import DQN
 from anyrl.models import MLPQNetwork, EpsGreedyQNetwork, rainbow_models
 from anyrl.rollouts import BasicPlayer, PrioritizedReplayBuffer, NStepPlayer
@@ -35,6 +37,7 @@ from graphdb import GraphDB
 
 # GLOBAL
 seed = 123
+pca = PCA(.85)
 done_penalty = -10
 np.random.seed(seed)
 EXPLOIT_BIAS = 0.001
@@ -396,6 +399,7 @@ class TrackedEnv(gym.Wrapper):
         if (int(self.reward_history[-2]) <= int(self.reward_history[-1])):
             self.esteem = True
         else:  # If esteem is low (i.e, stuck, in time loop, new scenario ask for help)
+
             if self.assist:
                 if not done:
                     self.trainer = True
