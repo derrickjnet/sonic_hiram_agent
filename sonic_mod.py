@@ -1,5 +1,6 @@
 """
 Environments and wrappers for Sonic training.
+#D. Johnson - Mod to Sonic_Utils
 """
 
 import gym
@@ -13,7 +14,7 @@ from collections import deque
 from baselines.common.atari_wrappers import WarpFrame, FrameStack
 import gym_remote.client as grc
 
-seed = 123
+seed = 33
 np.random.seed(seed)
 
 # Create Storage
@@ -21,6 +22,11 @@ conn = sqlite3.connect('retro.db')
 db_method = 'replace'
 db = conn.cursor()
 gb = GraphDB('graph.db')
+
+#Load Storage
+from auto_ml import Predictor
+from auto_ml.utils_models import load_ml_model
+# trained_step = load_ml_model("next_step.dill")
 
 
 # Setup Storage
@@ -123,6 +129,7 @@ class AllowBacktracking(gym.Wrapper):
         # Scene Trackers
         self.last_obs = []
         self.solutions = []
+        self.step_history = []
         self.action_history = []
         self.reward_history = []
         self.seq_replay = []
@@ -146,6 +153,7 @@ class AllowBacktracking(gym.Wrapper):
         self.track_evolution = deque(maxlen=2000)
         # Storage
         self.table = pd.read_sql_query("SELECT * from game_stats", conn)
+        self.graph = gb
 
     def best_sequence(self):
         """
@@ -168,7 +176,7 @@ class AllowBacktracking(gym.Wrapper):
         self.total_reward = 0
         self.steps = 0
         self.episode += 1
-        if spawn and self.episode > 15:
+        if spawn and self.episode > 50 and self.episode % 5 == 0:
             self.env.reset(**kwargs)
             new_state, rew, done = self.spawn()
             return new_state
@@ -183,7 +191,7 @@ class AllowBacktracking(gym.Wrapper):
         play_seq = gb(max_spawn).game_sequences(list)
         play_df = pd.DataFrame(play_seq).T
         idx = 0
-        idx_end = (len(play_df)-5)
+        idx_end = (len(play_df)-7)
         x_loc = 0
         while idx < idx_end:
             new_state, rew, done, _ = self.step(play_df.iloc[idx][0])
@@ -192,10 +200,6 @@ class AllowBacktracking(gym.Wrapper):
             x_loc += rew
             idx += 1
         return new_state, rew, done
-
-    def resume_rl(self, a=True):
-        self.rl = a
-        self.resume = a
 
     def maslow(self, done, info):
 
@@ -229,18 +233,7 @@ class AllowBacktracking(gym.Wrapper):
         self.action_history.append(action.copy())
         self.step_rew_history.append(rew)  # Step Reward
         self.total_reward += rew
-        self.curr_loc += rew
-        rew = max(0, self.curr_loc - self._max_x)  # Net 0 reward
-        self._max_x = max(self._max_x, self.curr_loc)  # Max level reached
         self.reward_history.append(self.total_reward)
-        if self.agent == 'Rainbow':
-            self.rainbow = max(self.rainbow, self.total_reward)
-        if self.agent == 'DQN':
-            self.dqn = max(self.dqn, self.total_reward)
-
-        if self.steps > 1:
-            self.maslow(done, info)
-        self.steps += 1
         # Setup
         acts1 = self.get_rew_hist(1)
         acts3 = self.get_rew_hist(3)
@@ -251,10 +244,11 @@ class AllowBacktracking(gym.Wrapper):
         acts33 = self.get_rew_hist(33)
         ac = 5 if len(self.action_history) > 5 else len(self.action_history)
         if self.steps > 1:
+            self.maslow(done, info)
             prev_loc = self.reward_history[-2]
             prev_action = str(self.action_history[-2])
             curr_action = str(self.action_history[-1])
-            action_cluster = str(self.action_history[-ac:])
+            action_cluster = str(self.action_history[-5:])
             gb.store_relation(self.total_reward, 'reached_from',
                               {'curr_action': curr_action, "prev_loc": prev_loc})
             db.execute("INSERT INTO sarsa VALUES (NULL,?,?, ?,?,?)",
@@ -294,26 +288,35 @@ class AllowBacktracking(gym.Wrapper):
                                   {'prev_loc': prev_loc, 'total_reward': self.total_reward})
             gb.store_relation('rewards', 'game_rewards', max(self.reward_history))
             gb.store_relation(max(self.reward_history), 'game_sequences', self.best_sequence())
+        self.steps += 1
 
-            # gb.store_relation(self.steps, 'is_during_chron', {'curr_action': curr_action, 'curr_reward': acts1})
-            # gb.store_relation(self.steps, 'is_after_chron', {'curr_action': curr_action, 'curr_reward': acts1})
-            # gb.store_relation(self.steps, 'best_micro_seq', {'curr_action': curr_action, 'curr_reward': acts1})
-            # gb.store_relation(self.steps, 'has_advantage', {'curr_action': curr_action, 'curr_reward': acts1})
-            # gb.store_relation(self.steps, 'has_disadvantage', {'curr_action': curr_action, 'curr_reward': acts1})
-            # gb.store_relation(self.steps, 'resembles', {'curr_action': curr_action, 'curr_reward': acts1})
-            # gb.store_relation(self.steps, 'contrasts', {'curr_action': curr_action, 'curr_reward': acts1})
-            # gb.store_relation(self.steps, 'caused', {'curr_action': curr_action, 'curr_reward': acts1})
-            # gb.store_relation(self.steps, 'solved', {'curr_action': curr_action, 'curr_reward': acts1})
 
-        # return tm
 
     def control(self, a=None):  # Enable Disrete Actions pylint: disable=W0221
         if not a:
             a = self.action_space.sample()
         obs, rew, done, info = self.step(self._actions[a].copy())
+        self.step_history.append(a)
+        if self.steps >= 5:
+            gb.store_relation('agent', 'take_action',
+                              {'start':time.time(),'prev_action_1':self.step_history[-1],'prev_reward_1':self.step_rew_history[-1]
+                                  ,'action':a,'reward':rew})
+        # print(a,rew)
         if done:
             self.reset()
         return self._actions[a].copy()
+
+    def predict_reward(self):
+        moves = pd.DataFrame(self.graph('agent').take_action(list))
+        prediction = trained_step.predict(moves[-1:])
+        return prediction
+
+    def predict_action(self,lookup=False):
+        x = self.graph(self.curr_loc).has_action(list)
+        da = pd.DataFrame(x).drop_duplicates()
+        topx = da.nlargest(3, 'curr_reward')
+        move = (topx['curr_action'][0])
+        return move
 
     def step(self, action, *args):
         test = np.array(action).ndim
@@ -324,8 +327,15 @@ class AllowBacktracking(gym.Wrapper):
         obs, rew, done, info = self.env.step(action)
         stop_time = time.time()
         self.last_obs = obs
-        self.insert_stats(action, obs, rew, done, info, start_time, stop_time)
+        self.curr_loc += rew
         #Acquire-Bond-Comprehend-Defend
-        rew = max(0, self.curr_loc - self._max_x) if np.median(self.step_rew_history[-3:]) != rew else -5 if not done else -10
+        self.insert_stats(action, obs, rew, done, info, start_time, stop_time)
+        if self.steps > 20:
+            1==1
+            # print('reward:',rew,'pred_reward:',self.predict_reward())
+        rew = max(0, self.curr_loc - self._max_x) #AllowBacktracking
+        self._max_x = max(self._max_x, self.curr_loc)
         # self.render()
         return obs, rew, done, info
+
+

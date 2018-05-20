@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+#D. Johnson - Rainbow Agent for Training Purposes
 
 """
 Train an agent on Sonic using an open source Rainbow DQN
@@ -16,7 +17,7 @@ import gym_remote.exceptions as gre
 
 from sonic_mod import AllowBacktracking, make_env
 
-local_env = True
+local_env = False
 
 def main():
     """Run DQN until the environment throws an exception."""
@@ -25,17 +26,6 @@ def main():
     config = tf.ConfigProto()
     config.gpu_options.allow_growth = True # pylint: disable=E1101
     with tf.Session(config=config) as sess:
-
-        done = False
-        env1.reset()
-        env1.agent = 'JERK'
-        print(env1.agent)
-        while env1.episode < 20:
-            rew, done = move(env1,100)
-            if not done and rew <= 0:
-                _, new_ep = move(env1, 70, left=True)
-
-
         dqn = DQN(*rainbow_models(sess,
                                   env.action_space.n,
                                   gym_space_vectorizer(env.observation_space),
