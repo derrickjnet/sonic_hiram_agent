@@ -8,7 +8,7 @@ RUN apt-get update && \
 # Baselines has some unneeded and cumbersome dependencies,
 # so we manually fetch the deps we need.
 RUN . ~/venv/bin/activate && \
-    pip install scipy tqdm joblib zmq dill progressbar2 cloudpickle opencv-python pandas graphdb && \
+    pip install scipy tqdm joblib zmq dill progressbar2 cloudpickle opencv-python pandas graphdb automl && \
     pip install auto_ml keras && \
     pip install --no-deps git+https://github.com/openai/baselines.git
 
@@ -16,7 +16,7 @@ RUN . ~/venv/bin/activate && \
 RUN . ~/venv/bin/activate && \
     pip install anyrl==0.11.17
 
-ADD hiram-dash.py ./agent.py
-ADD sonic_util.py .
+ADD hiram-agent.py ./agent.py
+ADD sonic_mod.py .
 
 CMD ["python", "-u", "/root/compo/agent.py"]

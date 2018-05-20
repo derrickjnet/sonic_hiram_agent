@@ -8,7 +8,7 @@ RUN apt-get update && \
 # Baselines has some unneeded and cumbersome dependencies,
 # so we manually fetch the deps we need.
 RUN . ~/venv/bin/activate && \
-    pip install scipy tqdm joblib zmq dill progressbar2 cloudpickle opencv-python pandas graphdb && \
+    pip install scipy tqdm joblib zmq dill progressbar2 cloudpickle opencv-python pandas graphdb automl && \
     pip install --no-deps git+https://github.com/openai/baselines.git
 
 # Use the anyrl open source RL framework.
