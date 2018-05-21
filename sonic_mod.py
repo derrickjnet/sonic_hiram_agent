@@ -9,10 +9,19 @@ import time
 import numpy as np
 import pandas as pd
 import sqlite3
+import gym_remote.client as grc
+import cv2
+cv2.ocl.setUseOpenCL(False)
+from gym import spaces
 from graphdb import GraphDB
 from collections import deque
-from baselines.common.atari_wrappers import WarpFrame, FrameStack
-import gym_remote.client as grc
+from baselines.common.atari_wrappers import FrameStack
+from sklearn.cluster import KMeans
+# from sklearn.feature_extraction import image
+# from skimage import data, io
+# from matplotlib import pyplot as plt
+
+
 
 seed = 33
 np.random.seed(seed)
@@ -44,6 +53,7 @@ def make_env(stack=True, scale_rew=True, local=False):
     """
     Create an environment with some standard wrappers.
     """
+    print(stack,scale_rew,local)
     if local:  # Select Random Level if local
         from retro_contest.local import make
         levels = ['SpringYardZone.Act3',
@@ -71,6 +81,20 @@ def make_env(stack=True, scale_rew=True, local=False):
     if stack:
         env = FrameStack(env, 4)
     return env
+
+class WarpFrame(gym.ObservationWrapper):
+    def __init__(self, env):
+        """Warp frames to 84x84 as done in the Nature paper and later work."""
+        gym.ObservationWrapper.__init__(self, env)
+        self.width = 84
+        self.height = 84
+        self.observation_space = spaces.Box(low=0, high=255,
+            shape=(self.height, self.width, 1), dtype=np.uint8)
+
+    def observation(self, frame):
+        frame = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+        frame = cv2.resize(frame, (self.width, self.height), interpolation=cv2.INTER_AREA)
+        return frame[:, :, None]
 
 
 class RewardScaler(gym.RewardWrapper):
@@ -154,6 +178,7 @@ class AllowBacktracking(gym.Wrapper):
         # Storage
         self.table = pd.read_sql_query("SELECT * from game_stats", conn)
         self.graph = gb
+        self.moves = pd.DataFrame(self.graph('agent').take_action(list))
 
     def best_sequence(self):
         """
@@ -176,7 +201,7 @@ class AllowBacktracking(gym.Wrapper):
         self.total_reward = 0
         self.steps = 0
         self.episode += 1
-        if spawn and self.episode > 50 and self.episode % 5 == 0:
+        if spawn and self.episode > 50 and self.episode % 3 == 0:
             self.env.reset(**kwargs)
             new_state, rew, done = self.spawn()
             return new_state
@@ -234,6 +259,10 @@ class AllowBacktracking(gym.Wrapper):
         self.step_rew_history.append(rew)  # Step Reward
         self.total_reward += rew
         self.reward_history.append(self.total_reward)
+        # patches = np.array(image.extract_patches_2d(obs, (42,42),max_patches=4)) #NORMAL,STUCK,DISRUPTED,JUMP
+        # for patch in patches:
+        #     io.imshow(patch)
+        #     plt.show()
         # Setup
         acts1 = self.get_rew_hist(1)
         acts3 = self.get_rew_hist(3)
@@ -295,20 +324,14 @@ class AllowBacktracking(gym.Wrapper):
     def control(self, a=None):  # Enable Disrete Actions pylint: disable=W0221
         if not a:
             a = self.action_space.sample()
-        obs, rew, done, info = self.step(self._actions[a].copy())
-        self.step_history.append(a)
-        if self.steps >= 5:
-            gb.store_relation('agent', 'take_action',
-                              {'start':time.time(),'prev_action_1':self.step_history[-1],'prev_reward_1':self.step_rew_history[-1]
-                                  ,'action':a,'reward':rew})
+        obs, rew, done, info = self.step(a)
         # print(a,rew)
         if done:
             self.reset()
-        return self._actions[a].copy()
+        return obs, rew, done, info
 
     def predict_reward(self):
-        moves = pd.DataFrame(self.graph('agent').take_action(list))
-        prediction = trained_step.predict(moves[-1:])
+        prediction = trained_step.predict(self.moves[-1:])
         return prediction
 
     def predict_action(self,lookup=False):
@@ -318,21 +341,34 @@ class AllowBacktracking(gym.Wrapper):
         move = (topx['curr_action'][0])
         return move
 
+    def cluster_action(self,step_num=-1):
+        moves = self.moves
+        moves['steps_sum'] = moves['prev_reward_2'] + moves['prev_reward_1'] + moves['reward']
+        moves_kmean = KMeans(n_clusters=11, random_state=0).fit(moves)
+        #Split Prep and Run????
+        return moves_kmean.predict(moves[step_num:])
+
     def step(self, action, *args):
+        action_num = action
         test = np.array(action).ndim
         if test < 1:
             action = self._actions[action].copy()
         self.total_steps_ever += 1
         start_time = time.time()
-        obs, rew, done, info = self.env.step(action)
+        obs, rew, done, info = self.env.step(action) # Took the step
+        self.step_history.append(action_num)
+        if self.steps >= 5: #Warm up before game starts
+            gb.store_relation('agent', 'take_action',
+                              {'prev_action_2': self.step_history[-3],
+                               'prev_reward_2': self.step_rew_history[-3],
+                               'prev_action_1': self.step_history[-2],
+                               'prev_reward_1': self.step_rew_history[-2]
+                                  , 'action': action_num, 'reward': rew})
         stop_time = time.time()
         self.last_obs = obs
         self.curr_loc += rew
         #Acquire-Bond-Comprehend-Defend
         self.insert_stats(action, obs, rew, done, info, start_time, stop_time)
-        if self.steps > 20:
-            1==1
-            # print('reward:',rew,'pred_reward:',self.predict_reward())
         rew = max(0, self.curr_loc - self._max_x) #AllowBacktracking
         self._max_x = max(self._max_x, self.curr_loc)
         # self.render()

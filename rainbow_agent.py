@@ -15,11 +15,11 @@ from anyrl.rollouts import BatchedPlayer, PrioritizedReplayBuffer, NStepPlayer
 from anyrl.spaces import gym_space_vectorizer
 import gym_remote.exceptions as gre
 
-from sonic_mod import AllowBacktracking, make_env
+from sonic_util import AllowBacktracking, make_env
 
 def main():
     """Run DQN until the environment throws an exception."""
-    env = AllowBacktracking(make_env(stack=False, scale_rew=False, local=False))
+    env = AllowBacktracking(make_env(stack=False, scale_rew=False))
     env = BatchedFrameStack(BatchedGymEnv([[env]]), num_images=4, concat=False)
     config = tf.ConfigProto()
     config.gpu_options.allow_growth = True # pylint: disable=E1101
@@ -31,7 +31,7 @@ def main():
                                   min_val=-200,
                                   max_val=200))
         player = NStepPlayer(BatchedPlayer(env, dqn.online_net), 3)
-        optimize = dqn.optimize(learning_rate=.001)#
+        optimize = dqn.optimize(learning_rate=1e-4)#
         sess.run(tf.global_variables_initializer())
         dqn.train(num_steps=2000000, # Make sure an exception arrives before we stop.
                   player=player,
@@ -41,7 +41,7 @@ def main():
                   target_interval=8192,
                   batch_size=32,
                   min_buffer_size=20000)
-        saver = tf.train.Saver()
+        # saver = tf.train.Saver()
 
 if __name__ == '__main__':
     try:

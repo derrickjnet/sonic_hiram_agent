@@ -19,12 +19,13 @@ from anyrl.models import MLPQNetwork, EpsGreedyQNetwork
 from anyrl.rollouts import BasicPlayer, PrioritizedReplayBuffer
 from anyrl.spaces import gym_space_vectorizer
 from sklearn.decomposition import PCA
+from sklearn.feature_extraction import image
 
 from sonic_mod import AllowBacktracking, make_env
 
 # ENV_LOCAL
-local_env = False
-render = False
+local_env = True
+render = True
 train = False
 
 # Load ML
@@ -47,7 +48,7 @@ STEPS_PER_UPDATE = 3
 ITERS_PER_LOG = 200
 BATCH_SIZE = 64
 EPSILON = 0.1
-LEARNING_RATE = 0.0001 #0000625
+LEARNING_RATE = 1e-4 #0000625
 # References
 # https://github.com/keon/deep-q-learning/blob/master/dqn.py
 
@@ -184,6 +185,7 @@ def move(env, num_steps, left=False, jump_prob=1.0 / 10.0, jump_repeat=4):
     while not done and steps_taken < num_steps:
         if left:
             action = env.control(2)
+
         else:
             action = env.control(3)
         if jumping_steps_left > 0:

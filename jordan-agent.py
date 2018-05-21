@@ -16,6 +16,12 @@ import gym_remote.exceptions as gre
 import pandas as pd
 from auto_ml import Predictor
 
+import numpy as np
+import matplotlib.pyplot as plt
+
+from sklearn.cluster import KMeans
+from sklearn.datasets import make_blobs
+
 from sonic_mod import AllowBacktracking, make_env
 
 local_env = True
@@ -29,26 +35,28 @@ def main():
     i = 0
     move_table = 50 #Build move table (Q) by testing each action x amount of times
     moves = pd.DataFrame(env.graph('agent').take_action(list))
-    moves['steps_sum'] = moves['prev_reward_1'] + moves['prev_reward_2'] + moves['prev_reward_3']
+    moves['steps_sum'] = moves['prev_reward_1'] + moves['reward']
+    moves_kmean = KMeans(n_clusters=5, random_state=0).fit(moves)
+    print(moves_kmean.predict(moves[-1:]))
 
     # moves.ix[:, 'action']   #select column
     # print(moves)
     #idea 5 columns,
 
-    # Setup Auto_ML
-    df_train = moves.sample(frac=.6)
-    df_test = moves.sample(frac=.4)
-
-    rew_descriptions = {
-        'reward': 'output',
-        'start': 'ignore'
-    }
-
-    ml_predictor = Predictor(type_of_estimator='regressor', column_descriptions=rew_descriptions)
-    ml_predictor.train(df_train, ml_for_analytics=True)
-    # ml_predictor.score(df_test, df_test.acts1)
-    print('predictions',ml_predictor.predict(moves[-1:]))
-    ml_predictor.save(file_name='next_step.dill', verbose=True)
+    # # Setup Auto_ML
+    # df_train = moves.sample(frac=.6)
+    # df_test = moves.sample(frac=.4)
+    #
+    # rew_descriptions = {
+    #     'reward': 'output',
+    #     'start': 'ignore'
+    # }
+    #
+    # ml_predictor = Predictor(type_of_estimator='regressor', column_descriptions=rew_descriptions)
+    # ml_predictor.train(df_train, ml_for_analytics=True)
+    # # ml_predictor.score(df_test, df_test.acts1)
+    # print('predictions',ml_predictor.predict(moves[-1:]))
+    # ml_predictor.save(file_name='next_step.dill', verbose=True)
 
 
 
