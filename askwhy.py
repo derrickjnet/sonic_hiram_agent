@@ -9,6 +9,7 @@ while i < 20:
     print('position',i)
     if i >= 0:
         da = pd.DataFrame(gb(i).has_action(list)).drop_duplicates()
+        da.drop['start_time']
         if not da.empty:
             print('top n actions by reward', da.nlargest(n,'curr_reward')) #Top 3 Actions
         dc = pd.DataFrame(gb(i).is_before_chron(list)).drop_duplicates()

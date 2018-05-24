@@ -79,15 +79,15 @@ class AllowBacktracking(gym.Wrapper):
         self.step_rew_history = []
 
     def reset(self, spawn=False, **kwargs): # pylint: disable=E0202
-        self._cur_x = 0
-        self._max_x = 0
-        self.curr_loc = 0
-        self.steps = 0
-        self.total_reward = 0
         self.action_history = []
         self.reward_history = []
         self.step_rew_history = []
+        self._cur_x = 0
+        self._max_x = 0
+        self.curr_loc = 0
         self.episode += 1
+        self.steps = 0
+        self.total_reward = 0
         if spawn and self.episode % 4 == 0:
             self.env.reset(**kwargs)
             new_state, rew, done = self.spawn()

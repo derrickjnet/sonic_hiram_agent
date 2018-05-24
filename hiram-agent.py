@@ -26,7 +26,7 @@ from sonic_mod import AllowBacktracking, make_env
 # ENV_LOCAL
 local_env = True
 render = True
-train = False
+train = True
 
 # Load ML
 # trained_model = load_ml_model('reward.ml')
@@ -70,7 +70,7 @@ def main():
                   'LabyrinthZone.Act1',
                   'LabyrinthZone.Act3']
         level_choice = levels[random.randrange(0, 13, 1)]
-        env = make_env(stack=False, scale_rew=False, local=local_env)
+        env = make_env(stack=False, scale_rew=False, local=local_env, level_choice=-3)
     else:
         print('connecting to remote environment')
         env = grc.RemoteEnv('tmp/sock')

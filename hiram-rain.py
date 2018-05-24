@@ -17,11 +17,11 @@ import gym_remote.exceptions as gre
 
 from sonic_mod import AllowBacktracking, make_env
 
-local_env = False
+local_env = True
 
 def main():
     """Run DQN until the environment throws an exception."""
-    env1 = AllowBacktracking(make_env(stack=False, scale_rew=False,local=local_env))
+    env1 = AllowBacktracking(make_env(stack=True, scale_rew=True,local=local_env))
     env = BatchedFrameStack(BatchedGymEnv([[env1]]), num_images=4, concat=False)
     config = tf.ConfigProto()
     config.gpu_options.allow_growth = True # pylint: disable=E1101
