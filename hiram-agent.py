@@ -69,8 +69,8 @@ def main():
                   'LabyrinthZone.Act2',
                   'LabyrinthZone.Act1',
                   'LabyrinthZone.Act3']
-        level_choice = levels[random.randrange(0, 13, 1)]
-        env = make_env(stack=False, scale_rew=False, local=local_env, level_choice=-3)
+        level_choice = random.randrange(0, 13, 1)
+        env = make_env(stack=False, scale_rew=False, local=local_env, level_choice=level_choice) #-3
     else:
         print('connecting to remote environment')
         env = grc.RemoteEnv('tmp/sock')

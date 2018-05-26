@@ -6,6 +6,7 @@ Environments and wrappers for Sonic training.
 import gym
 import random
 import time
+import math
 import numpy as np
 import pandas as pd
 import sqlite3
@@ -170,6 +171,7 @@ class AllowBacktracking(gym.Wrapper):
         self.step_history = []
         self.action_history = []
         self.reward_history = []
+        self.solutions = []
         self.step_rew_history = []
         self.start_time = time.time()
         # Maslow Trackers
@@ -264,6 +266,21 @@ class AllowBacktracking(gym.Wrapper):
         acts = np.round(acts, 4)
         return acts
 
+
+    def get_stats(self):
+        table = pd.read_sql_query("SELECT * from game_stats", conn)
+        return table
+
+    def penalty(self):
+        if self.steps > 1:
+            rew_pct = pd.Series(self.step_rew_history)
+            rew_pct = rew_pct.pct_change()
+            rew_pct = rew_pct[-1:]
+        else:
+            rew_pct = 0
+        return  rew_pct
+
+
     def insert_stats(self, action, obs, rew, done, info, start_time, stop_time):
         # tm = trained_model.predict(self.table[-1])
         self.action_history.append(action)
@@ -301,46 +318,30 @@ class AllowBacktracking(gym.Wrapper):
                         , int(self.trainer), int(self.total_reward)))
             conn.commit()
 
-
-            gb.store_relation(prev_loc, 'has_action',
-                              {'curr_action': curr_action, 'curr_reward': acts1})
-            gb.store_relation(prev_loc, 'is_before_chron',
-                              {'curr_loc': self.curr_loc, 'curr_action': curr_action, 'curr_reward': acts1,
-                               'start_time': start_time
-                                  , 'stop_time': stop_time})
-            if prev_loc == self.curr_loc:  # net_rew
-                gb.store_relation('stuck', 'at_place_spatial',
-                                  {'prev_loc': prev_loc, 'curr_action': curr_action, 'curr_reward': acts1,
-                                   'curr_loc': self.curr_loc
-                                      , 'start_time': start_time, 'stop_time': stop_time})
-            if prev_loc <= 0 and self.curr_loc > 0:
-                gb.store_relation('unstuck', 'at_place_spatial',
-                                  {'prev_loc': prev_loc, 'curr_action': curr_action, 'curr_reward': acts1,
-                                   'curr_loc': self.curr_loc
-                                      , 'start_time': start_time, 'stop_time': stop_time})
-            if done:
-                gb.store_relation('act_of_god', 'at_place_spatial',
-                                  {'prev_loc': prev_loc, 'curr_action': curr_action, 'curr_reward': acts1,
+            if not done:
+                gb.store_relation(prev_loc, 'has_action',
+                                  {'curr_action': curr_action, 'curr_reward': acts1})
+                gb.store_relation(prev_loc, 'is_before_chron',
+                                  {'curr_loc': self.curr_loc, 'curr_action': curr_action, 'curr_reward': acts1,
                                    'start_time': start_time
                                       , 'stop_time': stop_time})
-                gb.store_relation(self.agent, 'is_done_at',
-                                  {'prev_loc': prev_loc, 'total_reward': self.total_reward})
+                if prev_loc == self.curr_loc:  # net_rew
+                    gb.store_relation('stuck', 'at_place_spatial',
+                                      {'prev_loc': prev_loc, 'curr_action': curr_action, 'curr_reward': acts1,
+                                       'curr_loc': self.curr_loc
+                                          , 'start_time': start_time, 'stop_time': stop_time})
+                if prev_loc <= 0 and self.curr_loc > 0: #update to be prev reward is zero or negative and curr_loc > global
+                    gb.store_relation('unstuck', 'at_place_spatial',
+                                      {'prev_loc': prev_loc, 'curr_action': curr_action, 'curr_reward': acts1,
+                                       'curr_loc': self.curr_loc
+                                          , 'start_time': start_time, 'stop_time': stop_time})
+            else:
+                gb.store_relation('act_of_god', 'at_place_spatial',
+                                  {'prev_loc': prev_loc, 'curr_action': curr_action,'curr_loc': self.curr_loc,
+                                   'curr_reward': acts1,'start_time': start_time, 'stop_time': stop_time})
             gb.store_relation('rewards', 'game_rewards', max(self.reward_history))
             gb.store_relation(max(self.reward_history), 'game_sequences', self.best_sequence())
         self.steps += 1
-
-
-    def read_stats(self):
-        table = pd.read_sql_query("SELECT * from game_stats", conn)
-        return table
-
-
-    def control(self, a=None):  # Enable Disrete Actions pylint: disable=W0221
-        if not a:
-            a = self.action_space.sample()
-        obs, rew, done, info = self.step(a)
-        # print(a,rew)
-        return obs, rew, done, info
 
     def predict_reward(self):
         prediction = trained_step.predict(self.moves[-1:])
@@ -366,6 +367,13 @@ class AllowBacktracking(gym.Wrapper):
         #Split Prep and Run????
         return moves_kmean.predict(moves[step_num:])
 
+    def control(self, a=None):  # Enable Disrete Actions pylint: disable=W0221
+        if not a:
+            a = self.action_space.sample()
+        obs, rew, done, info = self.step(a)
+        # print(a,rew)
+        return obs, rew, done, info
+
     def step(self, action, *args):
         action_num = action
         test = np.array(action).ndim
@@ -388,8 +396,10 @@ class AllowBacktracking(gym.Wrapper):
         self.curr_loc += rew
         #Acquire-Bond-Comprehend-Defend
         self.insert_stats(action_num, obs, rew, done, info, self.start_time, stop_time)
+        penalty = float(self.penalty())
+        rew = max(0, self.curr_loc - self._max_x)
         self._max_x = max(self._max_x, self.curr_loc)
-        # self.render()
+        self.render()
         return obs, rew, done, info
 
 
