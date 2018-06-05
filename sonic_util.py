@@ -2,14 +2,16 @@
 Environments and wrappers for Sonic training.
 """
 
-import random
-import time
 import gym
+import math
 import numpy as np
+import cv2
 import pandas as pd
-from graphdb import GraphDB
+import time
 
-from baselines.common.atari_wrappers import WarpFrame, FrameStack
+from baselines.common.atari_wrappers import FrameStack
+from gym import spaces
+from graphdb import GraphDB
 import gym_remote.client as grc
 
 gb = GraphDB('graph.db')
@@ -26,6 +28,20 @@ def make_env(stack=True, scale_rew=True):
     if stack:
         env = FrameStack(env, 4)
     return env
+
+class WarpFrame(gym.ObservationWrapper):
+    def __init__(self, env):
+        """Warp frames to 84x84 as done in the Nature paper and later work."""
+        gym.ObservationWrapper.__init__(self, env)
+        self.width = 84
+        self.height = 84
+        self.observation_space = spaces.Box(low=0, high=255,
+            shape=(self.height, self.width, 1), dtype=np.uint8)
+
+    def observation(self, frame):
+        frame = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+        frame = cv2.resize(frame, (self.width, self.height), interpolation=cv2.INTER_AREA)
+        return frame[:, :, None]
 
 class SonicDiscretizer(gym.ActionWrapper):
     """
@@ -67,63 +83,34 @@ class AllowBacktracking(gym.Wrapper):
     """
     def __init__(self, env):
         super(AllowBacktracking, self).__init__(env)
-        self.agent ='Rainbow'
         self._cur_x = 0
         self._max_x = 0
-        self.curr_loc = 0
-        self.episode = 0
-        self.steps = 0
-        self.total_reward = 0
+        self.global_rewards = 0
+        self.replay_retry = .15
+        self.start_time = time.time()
         self.action_history = []
         self.reward_history = []
-        self.step_rew_history = []
 
-    def reset(self, spawn=False, **kwargs): # pylint: disable=E0202
-        self.action_history = []
-        self.reward_history = []
-        self.step_rew_history = []
+    def reset(self, spawn=True,**kwargs): # pylint: disable=E0202
         self._cur_x = 0
         self._max_x = 0
-        self.curr_loc = 0
-        self.episode += 1
-        self.steps = 0
-        self.total_reward = 0
-        if spawn and self.episode % 4 == 0:
+        self.start_time = time.time()
+        self.action_history = []
+        self.reward_history = []
+        if (spawn and self.global_rewards/10000 >= self.replay_retry):
             self.env.reset(**kwargs)
             new_state, rew, done = self.spawn()
             return new_state
         return self.env.reset(**kwargs)
 
     def step(self, action): # pylint: disable=E0202
-        start_time = time.time()
         obs, rew, done, info = self.env.step(action)
         stop_time = time.time()
-        self.insert_stats(action,obs,rew,done,info,start_time,stop_time)
         self._cur_x += rew
-        #Acquire-Bond-Comprehend-Defend
-        rew = max(0, self._cur_x - self._max_x) if np.median(self.step_rew_history[-3:]) != rew else -5 if not done else -10
+        self.insert_stats(action, obs, rew, done, info, self.start_time, stop_time)
+        rew = max(0, self._cur_x - self._max_x)
         self._max_x = max(self._max_x, self._cur_x)
-        self.steps += 1
         return obs, rew, done, info
-
-    def spawn(self):
-        rewards = gb('rewards').game_rewards(list)
-        min_spawn = float(np.min(rewards))
-        mode_spawn = float(np.median(rewards))
-        max_spawn = float(np.max(rewards))
-
-        play_seq = gb(max_spawn).game_sequences(list)
-        play_df = pd.DataFrame(play_seq).T
-        idx = 0
-        idx_end = (len(play_df)-5)
-        x_loc = 0
-        while idx < idx_end:
-            new_state, rew, done, _ = self.step(play_df.iloc[idx][0])
-            if done:
-                self.reset()
-            x_loc += rew
-            idx += 1
-        return new_state, rew, done
 
     def best_sequence(self):
         """
@@ -136,42 +123,37 @@ class AllowBacktracking(gym.Wrapper):
                 return self.action_history[:i + 1]
         raise RuntimeError('unreachable')
 
+    def calc_rewards(self):
+        try:
+            rewards = gb('rewards').game_rewards(list)
+            min_spawn = float(np.min(rewards))
+            max_spawn = float(np.max(rewards))
+        except:
+            min_spawn = 0
+            max_spawn=0
+        return  min_spawn, max_spawn
+
     def insert_stats(self, action, obs, rew, done, info, start_time, stop_time):
-        self.action_history.append(action.copy())
-        self.step_rew_history.append(rew)  # Step Reward
-        self.reward_history.append(self.total_reward)
-        self.total_reward += rew
-        self.curr_loc += rew
-        if self.steps > 1:
-            prev_loc = self.reward_history[-2]
-            prev_action = str(self.action_history[-2])
-            curr_action = str(self.action_history[-1])
-            gb.store_relation(self.total_reward, 'reached_from',
-                                  {'curr_action': curr_action, "prev_loc": prev_loc})
-            if prev_loc < self.curr_loc:  # pos_rew
-                gb.store_relation(int(prev_loc), 'has_action',
-                                  {'curr_action': curr_action, 'curr_reward': rew, 'start_time': start_time
-                                      , 'stop_time': stop_time, 'agent': self.agent})
-                gb.store_relation(int(prev_loc), 'is_before_chron',
-                                  {'curr_loc': self.curr_loc, 'curr_action': curr_action, 'curr_reward': rew,
-                                   'start_time': start_time
-                                      , 'stop_time': stop_time, 'agent': self.agent})
-            if prev_loc == self.curr_loc:  # net_rew
-                gb.store_relation('stuck', 'at_place_spatial',
-                                  {'prev_loc': prev_loc, 'curr_action': curr_action, 'curr_reward': rew,
-                                   'curr_loc': self.curr_loc
-                                      , 'start_time': start_time, 'stop_time': stop_time, 'agent': self.agent})
-            if prev_loc <= 0 and self.curr_loc > 0:
-                gb.store_relation('unstuck', 'at_place_spatial',
-                                  {'prev_loc': prev_loc, 'curr_action': curr_action, 'curr_reward': rew,
-                                   'curr_loc': self.curr_loc
-                                      , 'start_time': start_time, 'stop_time': stop_time, 'agent': self.agent})
+        self.action_history.append(action)  # Last Step
+        self.reward_history.append(self._cur_x)
         if done:
-            gb.store_relation('act_of_god', 'at_place_spatial',
-                              {'prev_loc': prev_loc, 'curr_action': curr_action, 'curr_reward': rew,
-                               'start_time': start_time
-                                  , 'stop_time': stop_time, 'agent': self.agent})
-            gb.store_relation(self.agent, 'is_done_at',
-                              {'prev_loc': prev_loc, 'total_reward': self.total_reward})
             gb.store_relation('rewards', 'game_rewards', max(self.reward_history))
             gb.store_relation(max(self.reward_history), 'game_sequences', self.best_sequence())
+            self.global_rewards = max(self._cur_x,self.global_rewards)
+            self.replay_retry = max(self.replay_retry,(self.global_rewards/10000)+.05)
+
+    def spawn(self):
+        _, max_spawn = self.calc_rewards()
+        #get_start_time,update_table to confirm action, location, reward
+        play_seq = gb(max_spawn).game_sequences(list)
+        play_df = pd.DataFrame(play_seq).T
+        idx = 0
+        idx_end = (len(play_df)-50)
+        x_loc = 0
+        while idx < idx_end:
+            new_state, rew, done, _ = self.step(play_df.iloc[idx][0])
+            if done:
+                self.reset()
+            x_loc += rew
+            idx += 1
+        return new_state, rew, done
