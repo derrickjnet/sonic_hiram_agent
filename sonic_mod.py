@@ -7,12 +7,13 @@ import gym
 import random
 import time
 import math
+import statistics
 import numpy as np
 import pandas as pd
 import sqlite3
 import gym_remote.client as grc
 import cv2
-import pytesseract
+import imutils
 cv2.ocl.setUseOpenCL(False)
 from gym import spaces
 from graphdb import GraphDB
@@ -22,6 +23,7 @@ from sklearn.cluster import KMeans
 # from sklearn.feature_extraction import image
 # from skimage import data, io
 # from matplotlib import pyplot as plt
+from skimage.measure import compare_ssim
 
 from abc import ABC, abstractmethod
 from collections import OrderedDict
@@ -97,7 +99,6 @@ class WarpFrame(gym.ObservationWrapper):
             shape=(self.height, self.width, 1), dtype=np.uint8)
 
     def observation(self, frame):
-        print(pytesseract.image_to_string(frame))
         v = np.median(frame)
         sigma=0.33
         # apply automatic Canny edge detection using the computed median
@@ -289,6 +290,7 @@ class AllowBacktracking(gym.Wrapper):
         self.solutions = []
         self.step_rew_history = []
         self.step_penalty_history = []
+        self.obs_history = []
         self.start_time = time.time()
         # Maslow Trackers
         self.survival = False  # Tracks done, seeks to prevent done unless potential reached
@@ -344,6 +346,20 @@ class AllowBacktracking(gym.Wrapper):
             min_spawn = 0
             max_spawn=0
         return  min_spawn, max_spawn
+
+    def calc_experience(self,obs,rew):
+        # compute the Structural Similarity Index (SSIM) between the two
+        # images, ensuring that the difference image is returned
+        loc_score = max(0, self.curr_loc - self._max_x)
+        penalty_score = float(self.penalty()) if not math.isnan(self.penalty()) else 0
+        exp_score = statistics.mean([loc_score, penalty_score,rew]) #location progress, step (pct_rew), reward
+        print(loc_score,penalty_score,rew, exp_score)
+        if exp_score == 0:
+            rtn_score = -10
+            print('stuck')
+        else:
+            rtn_score = loc_score
+        return rtn_score
 
     def spawn(self):
         _, max_spawn = self.calc_rewards()
@@ -544,7 +560,7 @@ class AllowBacktracking(gym.Wrapper):
         self.curr_loc += rew
         #Acquire-Bond-Comprehend-Defend
         self.insert_stats(action_num, obs, rew, done, info, self.start_time, stop_time)
-        rew = max(0, self.curr_loc - self._max_x)
+        rew = self.calc_experience(obs,rew)
         # rew = rew + float(self.penalty()*.1)
         # if rew == 0 and self.steps > 3:
         #     if self.step_rew_history[-2] > 2 and self.step_rew_history[-1] < 0 and float(self.penalty()) < -1:
@@ -558,7 +574,7 @@ class AllowBacktracking(gym.Wrapper):
         #     else:
         #         self.unknown_cnt += 1
         self._max_x = max(self._max_x, self.curr_loc)
-        # self.render()
+        self.render()
         return obs, rew, done, info
 
 

@@ -4,14 +4,22 @@ Environments and wrappers for Sonic training.
 
 import gym
 import math
+import statistics
 import numpy as np
 import cv2
 import pandas as pd
 import time
+import random
+# import the necessary packages
+import argparse
+import imutils
+import cv2
 
 from baselines.common.atari_wrappers import FrameStack
 from gym import spaces
 from graphdb import GraphDB
+from skimage.measure import compare_ssim
+
 import gym_remote.client as grc
 
 gb = GraphDB('graph.db')
@@ -86,20 +94,25 @@ class AllowBacktracking(gym.Wrapper):
         self._cur_x = 0
         self._max_x = 0
         self.global_rewards = 0
-        self.replay_retry = .15
+        self.replay_retry = .1
+        self.max_score = 10000
         self.start_time = time.time()
         self.action_history = []
         self.reward_history = []
+        self.obs_history = []
+        self.mod_reward_history = []
 
-    def reset(self, spawn=True,**kwargs): # pylint: disable=E0202
+    def reset(self, spawn=bool(random.getrandbits(1)),**kwargs): # pylint: disable=E0202
         self._cur_x = 0
         self._max_x = 0
         self.start_time = time.time()
         self.action_history = []
         self.reward_history = []
-        if (spawn and self.global_rewards/10000 >= self.replay_retry):
-            self.env.reset(**kwargs)
-            new_state, rew, done = self.spawn()
+        self.step_rew_history = []
+        if (spawn and self.global_rewards/self.max_score > self.replay_retry):
+            reset_obs = self.env.reset(**kwargs)
+            new_state, rew, done = self.spawn(reset_obs)
+            self.replay_retry = self.global_rewards/self.max_score
             return new_state
         return self.env.reset(**kwargs)
 
@@ -108,7 +121,8 @@ class AllowBacktracking(gym.Wrapper):
         stop_time = time.time()
         self._cur_x += rew
         self.insert_stats(action, obs, rew, done, info, self.start_time, stop_time)
-        rew = max(0, self._cur_x - self._max_x)
+        rew = self.calc_experience(obs,rew)
+        self.mod_reward_history.append(rew)
         self._max_x = max(self._max_x, self._cur_x)
         return obs, rew, done, info
 
@@ -133,22 +147,42 @@ class AllowBacktracking(gym.Wrapper):
             max_spawn=0
         return  min_spawn, max_spawn
 
+    def calc_experience(self,obs,rew):
+        # compute the Structural Similarity Index (SSIM) between the two
+        # images, ensuring that the difference image is returned
+        loc_score = max(0, self._cur_x - self._max_x)
+        penalty_score = float(self.penalty()) if not math.isnan(self.penalty()) else 0
+        exp_score = statistics.mean([loc_score, penalty_score,rew]) #location progress, step (pct_rew), reward
+        print(loc_score,penalty_score,rew, exp_score)
+        if exp_score == 0:
+            rtn_score = -10
+        else:
+            rtn_score = loc_score
+        return rtn_score
+
     def insert_stats(self, action, obs, rew, done, info, start_time, stop_time):
         self.action_history.append(action)  # Last Step
         self.reward_history.append(self._cur_x)
+        self.step_rew_history.append(rew)  # Last Reward
         if done:
             gb.store_relation('rewards', 'game_rewards', max(self.reward_history))
             gb.store_relation(max(self.reward_history), 'game_sequences', self.best_sequence())
             self.global_rewards = max(self._cur_x,self.global_rewards)
-            self.replay_retry = max(self.replay_retry,(self.global_rewards/10000)+.05)
 
-    def spawn(self):
+
+    def penalty(self):
+        rew_pct = pd.Series(self.step_rew_history)
+        rew_pct = rew_pct.pct_change()
+        rew_pct = rew_pct[-1:]
+        return  rew_pct
+
+    def spawn(self,reset_obs):
         _, max_spawn = self.calc_rewards()
         #get_start_time,update_table to confirm action, location, reward
         play_seq = gb(max_spawn).game_sequences(list)
         play_df = pd.DataFrame(play_seq).T
         idx = 0
-        idx_end = (len(play_df)-50)
+        idx_end = len(play_df)-50 if len(play_df) <= 3000 else 500
         x_loc = 0
         while idx < idx_end:
             new_state, rew, done, _ = self.step(play_df.iloc[idx][0])
