@@ -27,8 +27,8 @@ def main():
         dqn = DQN(*rainbow_models(sess,
                                   env.action_space.n,
                                   gym_space_vectorizer(env.observation_space),
-                                  min_val=-200,
-                                  max_val=200))
+                                  min_val=-421,
+                                  max_val=421))
         player = NStepPlayer(BatchedPlayer(env, dqn.online_net), 3)
         optimize = dqn.optimize(learning_rate=1e-4)
         sess.run(tf.global_variables_initializer())
@@ -37,9 +37,9 @@ def main():
                   replay_buffer=PrioritizedReplayBuffer(500000, 0.5, 0.4, epsilon=0.1),
                   optimize_op=optimize,
                   train_interval=1,
-                  target_interval=8192,
+                  target_interval=64,
                   batch_size=32,
-                  min_buffer_size=20000)
+                  min_buffer_size=25000)
 
 if __name__ == '__main__':
     try:
