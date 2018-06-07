@@ -182,7 +182,7 @@ class AllowBacktracking(gym.Wrapper):
         play_seq = gb(max_spawn).game_sequences(list)
         play_df = pd.DataFrame(play_seq).T
         idx = 0
-        idx_end = len(play_df)-50 if len(play_df) <= 3000 else 500
+        idx_end = len(play_df)-33
         x_loc = 0
         while idx < idx_end:
             new_state, rew, done, _ = self.step(play_df.iloc[idx][0])
